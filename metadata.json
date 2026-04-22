@@ -1,0 +1,6 @@
+{
+  "name": "OpenSuggest",
+  "description": "A cross-platform desktop application prototype for system-wide AI autocomplete following a local-first architecture.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}

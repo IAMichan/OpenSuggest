@@ -1,0 +1,80 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@400;700;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", var(--font-sans);
+  
+  /* Modern High-End Mono/Dark Colors */
+  --color-primary: oklch(1 0 0);
+  --color-primary-foreground: oklch(0 0 0);
+  --color-background: oklch(0.05 0 0);
+  --color-foreground: oklch(1 0 0);
+  --color-muted: oklch(0.15 0 0);
+  --color-muted-foreground: oklch(0.5 0 0);
+  --color-border: oklch(1 0 0 / 8%);
+  --color-card: oklch(0.1 0 0);
+  --color-destructive: oklch(0.6 0.25 25);
+  
+  --radius-md: 4px;
+  --radius-xl: 8px;
+  --radius-2xl: 16px;
+}
+
+@layer base {
+  body {
+    @apply bg-background text-foreground antialiased selection:bg-primary/10;
+  }
+}
+
+/* UI Patterns from iPulse */
+.glass-card {
+  @apply bg-card/95 backdrop-blur-sm border border-border/50 rounded-xl shadow-lg transition-all duration-300;
+}
+
+.ipulse-button-primary {
+  @apply flex items-center justify-center px-6 py-2 bg-primary text-primary-foreground rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none hover:shadow-lg hover:shadow-primary/20;
+}
+
+.ipulse-button-secondary {
+  @apply flex items-center justify-center px-4 py-2 bg-muted text-foreground rounded-md font-medium transition-all active:scale-95 border border-border/50 hover:bg-muted/80;
+}
+
+.ipulse-input {
+  @apply h-9 px-3 bg-white/5 border border-border/50 rounded-md text-sm transition-all focus-visible:ring-primary/50 focus-visible:ring-[3px] outline-none shadow-xs;
+}
+
+.section-label {
+  @apply text-xs font-bold uppercase tracking-wider text-muted-foreground mb-4;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}
+
+.setting-row {
+  @apply flex justify-between items-center py-4 border-b border-border/30 last:border-0;
+}
+
+/* Custom scrollbar matching iPulse subtlety */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/40 transition-colors;
+}
+
+/* Toggle Switch Style matching iPulse radius */
+.toggle-switch {
+  @apply w-[42px] h-[22px] rounded-full relative cursor-pointer transition-colors duration-200 border border-border/50;
+}
+.toggle-switch-on { @apply bg-primary; }
+.toggle-switch-off { @apply bg-muted; }
+.toggle-handle {
+  @apply absolute w-[16px] h-[16px] bg-foreground rounded-full top-[2px] transition-all duration-200;
+}
+.toggle-handle-on { @apply right-[2px]; }
+.toggle-handle-off { @apply right-[22px]; }

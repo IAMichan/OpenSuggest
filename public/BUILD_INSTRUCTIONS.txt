@@ -1,0 +1,21 @@
+# OpenSuggest Desktop Client Build Instructions
+
+To build the native desktop client for your operating system (macOS, Windows, or Linux), follow these steps:
+
+1. **Install Prerequisites**:
+   - Install **Node.js** (v18+)
+   - Install **Rust** (via rustup.rs)
+   - (Windows) Install **WebView2** and **C++ Build Tools**
+   - (macOS) Install **Xcode Command Line Tools**
+   - (Linux) Install system dependencies (libwebkit2gtk-4.0-dev, etc.)
+
+2. **Clone and Install**:
+   - `npm install`
+
+3. **Build the Client**:
+   - `npm run tauri build`
+
+4. **Location of Binary**:
+   - The compiled installer will be found in: `src-tauri/target/release/bundle/`
+
+For more information, visit: https://tauri.app/v1/guides/getting-started/
