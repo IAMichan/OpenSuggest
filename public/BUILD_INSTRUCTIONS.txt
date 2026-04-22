@@ -2,20 +2,72 @@
 
 To build the native desktop client for your operating system (macOS, Windows, or Linux), follow these steps:
 
-1. **Install Prerequisites**:
-   - Install **Node.js** (v18+)
-   - Install **Rust** (via rustup.rs)
-   - (Windows) Install **WebView2** and **C++ Build Tools**
-   - (macOS) Install **Xcode Command Line Tools**
-   - (Linux) Install system dependencies (libwebkit2gtk-4.0-dev, etc.)
+## 1. Install Prerequisites
+- Install **Node.js** (v18+)
+- Install **Rust** (via rustup.rs)
+- (Windows) Install **WebView2** and **C++ Build Tools**
+- (macOS) Install **Xcode Command Line Tools**
+- (Linux) Install system dependencies (libwebkit2gtk-4.0-dev, etc.)
 
-2. **Clone and Install**:
-   - `npm install`
+## 2. Clone and Install Dependencies
+```
+npm install
+```
 
-3. **Build the Client**:
-   - `npm run tauri build`
+## 3. Bundle the Ollama Engine (REQUIRED before building)
 
-4. **Location of Binary**:
-   - The compiled installer will be found in: `src-tauri/target/release/bundle/`
+OpenSuggest bundles its own Ollama engine + AI model so users don't need to install anything.
+These large binary files are NOT in git — you must add them manually before building.
 
-For more information, visit: https://tauri.app/v1/guides/getting-started/
+### 3a. Get the Ollama binary
+1. Install or download Ollama.app from https://ollama.com/download/mac
+2. Right-click Ollama.app → "Show Package Contents"
+3. Go to Contents/Resources/
+4. Copy the file named `ollama` (the CLI binary, ~74 MB)
+5. Paste it into: `src-tauri/resources/ollama`
+6. Make it executable: `chmod +x src-tauri/resources/ollama`
+
+### 3b. Bundle the AI model (gemma2:2b)
+First, pull the model once: `ollama pull gemma2:2b`
+
+Then copy the model files:
+```bash
+mkdir -p src-tauri/resources/ollama_models/blobs
+mkdir -p src-tauri/resources/ollama_models/manifests/registry.ollama.ai/library/gemma2
+
+# Copy model blobs
+cp ~/.ollama/models/blobs/sha256-7462734796d67c40ecec2ca98eddf970e171dbb6b370e43fd633ee75b69abe1b \
+   src-tauri/resources/ollama_models/blobs/
+cp ~/.ollama/models/blobs/sha256-e0a42594d802e5d31cdc786deb4823edb8adff66094d49de8fffe976d753e348 \
+   src-tauri/resources/ollama_models/blobs/
+cp ~/.ollama/models/blobs/sha256-097a36493f718248845233af1d3fefe7a303f864fae13bc31a3a9704229378ca \
+   src-tauri/resources/ollama_models/blobs/
+cp ~/.ollama/models/blobs/sha256-2490e7468436707d5156d7959cf3c6341cc46ee323084cfa3fcf30fe76e397dc \
+   src-tauri/resources/ollama_models/blobs/
+cp ~/.ollama/models/blobs/sha256-e18ad7af7efbfaecd8525e356861b84c240ece3a3effeb79d2aa7c0f258f71bd \
+   src-tauri/resources/ollama_models/blobs/
+
+# Copy manifest
+cp ~/.ollama/models/manifests/registry.ollama.ai/library/gemma2/2b \
+   src-tauri/resources/ollama_models/manifests/registry.ollama.ai/library/gemma2/2b
+```
+
+Expected size of `src-tauri/resources/`: ~1.6 GB (this is normal for bundled AI apps)
+
+## 4. Build the App
+```
+npm run tauri build
+```
+
+## 5. Location of Binary
+The compiled installer will be found in: `src-tauri/target/release/bundle/`
+
+---
+
+## How Bundling Works
+- The app starts its own Ollama server on port **11435** (no conflict with user's Ollama on 11434)
+- The env vars `OLLAMA_HOST=127.0.0.1:11435` and `OLLAMA_MODELS=<resources>/ollama_models` are set
+- gemma2:2b is always available offline, no internet required
+- The bundled server is shut down when the app exits
+
+For more information: https://tauri.app/v1/guides/getting-started/

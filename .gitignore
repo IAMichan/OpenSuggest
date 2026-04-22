@@ -6,3 +6,16 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Gebundelde Ollama binary en modellen (te groot voor git — handmatig toevoegen)
+# Zie public/BUILD_INSTRUCTIONS.txt voor instructies
+src-tauri/resources/ollama
+src-tauri/resources/ollama_models/
+
+# Rust / Tauri
+src-tauri/target/
+src-tauri/gen/
+src-tauri/Cargo.lock
+
+# macOS
+.DS_Store

@@ -1,6 +1,13 @@
 import React from 'react';
-import { Settings, Cpu, Terminal, Zap, Shield, HelpCircle, Power, MonitorSmartphone, Clock, Layout, MousePointer2 } from 'lucide-react';
+import {
+  Settings, Cpu, Zap, Shield, Power, MonitorSmartphone,
+  Clock, Layout, Keyboard, BarChart2
+} from 'lucide-react';
 import { motion } from 'motion/react';
+import { APP_VERSION } from '../constants';
+
+const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
+const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
 
 interface SidebarProps {
   activeTab: string;
@@ -9,74 +16,82 @@ interface SidebarProps {
   onToggle: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isEnabled, onToggle }) => {
-  const items = [
-    { id: 'web', label: 'Welcome Page', icon: Layout },
-    { id: 'settings', label: 'General Settings', icon: Settings },
-    { id: 'models', label: 'Models & Engine', icon: Cpu },
-    { id: 'personalization', label: 'Typing History', icon: Clock },
-    { id: 'stats', label: 'Inference Stats', icon: Zap },
-    { id: 'shortcuts', label: 'Key Shortcuts', icon: Zap },
-    { id: 'privacy', label: 'Privacy Hub', icon: Shield },
-    { id: 'download', label: 'Download App', icon: MonitorSmartphone },
-  ];
+const navItems = [
+  { id: 'demo', label: 'Playground', icon: Zap },
+  { id: 'settings', label: 'General', icon: Settings },
+  { id: 'models', label: 'Models & Engine', icon: Cpu },
+  { id: 'personalization', label: 'Typing History', icon: Clock },
+  { id: 'stats', label: 'Statistics', icon: BarChart2 },
+  { id: 'shortcuts', label: 'Key Shortcuts', icon: Keyboard },
+  { id: 'privacy', label: 'Privacy & Security', icon: Shield },
+];
 
+export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isEnabled, onToggle }) => {
   return (
-    <div className="w-[300px] h-full bg-black border-r border-white/5 flex flex-col p-10" id="app-sidebar">
-      <div className="mb-14">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-10 h-10 rounded-2xl bg-white shadow-[0_0_20px_rgba(255,255,255,0.15)] flex items-center justify-center">
-            <Zap className="w-6 h-6 text-black fill-black" />
+    <div className="w-[280px] h-full bg-black border-r border-white/5 flex flex-col" id="app-sidebar">
+      {/* macOS traffic lights drag zone + logo */}
+      <div
+        className={`flex flex-col flex-shrink-0 px-6 ${isDesktop && isMac ? 'pt-[52px]' : 'pt-8'}`}
+        data-tauri-drag-region
+      >
+        {/* Logo */}
+        <div className="mb-10 pointer-events-none" data-tauri-drag-region>
+          <div className="flex items-center gap-3 mb-2" data-tauri-drag-region>
+            <div className="w-9 h-9 rounded-xl bg-white shadow-[0_0_20px_rgba(255,255,255,0.12)] flex items-center justify-center flex-shrink-0">
+              <Zap className="w-5 h-5 text-black fill-black" />
+            </div>
+            <h1 className="text-lg font-display font-black tracking-tighter text-white uppercase">
+              OpenSuggest
+            </h1>
           </div>
-          <h1 className="text-2xl font-display font-black tracking-tighter text-white uppercase">Suggest</h1>
-        </div>
-        <div className="flex items-center gap-2">
-           <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-           <p className="text-[10px] text-white/30 uppercase tracking-[0.4em] font-black">CORE v2.1.0</p>
+          <div className="flex items-center gap-2 ml-0.5">
+            <motion.div
+              animate={{ opacity: [1, 0.3, 1] }}
+              transition={{ duration: 2, repeat: Infinity }}
+              className={`w-1.5 h-1.5 rounded-full ${isEnabled ? 'bg-white' : 'bg-white/20'}`}
+            />
+            <p className="text-[9px] text-white/25 uppercase tracking-[0.4em] font-black">
+              v{APP_VERSION}
+            </p>
+          </div>
         </div>
       </div>
 
-      <nav className="flex-1 space-y-1.5">
-        <div className="text-[10px] font-black text-white/10 uppercase tracking-[0.3em] mb-6 ml-4">Terminal Map</div>
-        {items.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => onTabChange(item.id)}
-            className={`w-full flex items-center gap-4 px-5 py-4 rounded-2xl transition-all duration-500 group ${
-              activeTab === item.id
-                ? 'bg-white text-black shadow-[0_20px_40px_-5px_rgba(255,255,255,0.1)] scale-[1.02]'
-                : 'text-white/30 hover:bg-white/[0.03] hover:text-white/60'
-            }`}
-          >
-            <item.icon className={`w-5 h-5 transition-transform duration-500 group-hover:scale-110 ${activeTab === item.id ? 'text-black' : 'text-inherit'}`} />
-            <span className="text-sm font-display font-bold uppercase tracking-tight">{item.label}</span>
-          </button>
-        ))}
+      {/* Navigation */}
+      <nav className="flex-1 space-y-0.5 overflow-y-auto px-6">
+        <p className="text-[9px] font-black text-white/15 uppercase tracking-[0.35em] mb-4 ml-3">
+          Navigation
+        </p>
+        {navItems.map((item) => {
+          const isActive = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => onTabChange(item.id)}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group ${
+                isActive
+                  ? 'bg-white text-black shadow-[0_8px_24px_rgba(255,255,255,0.08)]'
+                  : 'text-white/30 hover:text-white/70 hover:bg-white/[0.04]'
+              }`}
+            >
+              <item.icon
+                className={`w-4 h-4 flex-shrink-0 transition-transform duration-300 ${
+                  isActive ? 'text-black' : 'group-hover:scale-110'
+                }`}
+              />
+              <span className="text-xs font-display font-bold uppercase tracking-tight truncate">
+                {item.label}
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
-      <div className="pt-10 mt-auto border-t border-white/5">
-        <button
-          onClick={onToggle}
-          className={`w-full p-5 rounded-[24px] border transition-all duration-500 flex items-center justify-between group ${
-            isEnabled 
-              ? 'bg-white/5 border-white/10 hover:border-white/20' 
-              : 'bg-black border-red-500/20 hover:border-red-500/40 opacity-50'
-          }`}
-        >
-          <div className="flex flex-col items-start text-left">
-            <span className="text-[9px] font-black text-white/20 uppercase tracking-[0.3em] mb-1.5">Status</span>
-            <span className={`text-xs font-display font-black uppercase tracking-widest ${isEnabled ? 'text-white' : 'text-red-500'}`}>
-              {isEnabled ? 'Core Active' : 'Offline'}
-            </span>
-          </div>
-          <div className={`w-11 h-11 rounded-2xl flex items-center justify-center transition-all duration-500 ${
-            isEnabled 
-              ? 'bg-white text-black shadow-lg shadow-white/5' 
-              : 'bg-red-500/10 text-red-500'
-          }`}>
-            <Power className="w-5 h-5" />
-          </div>
-        </button>
+      {/* Version Info Only */}
+      <div className="pt-6 mt-4 border-t border-white/5 px-6 pb-8 flex justify-center">
+        <p className="text-[9px] text-white/10 uppercase tracking-[0.4em] font-black">
+          v{APP_VERSION}
+        </p>
       </div>
     </div>
   );

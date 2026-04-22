@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>OpenSuggest uses Apple Events to read context from active applications.</string>
+    <key>NSScreenRecordingUsageDescription</key>
+    <string>OpenSuggest uses screen recording to analyze visible content and provide smarter, context-aware suggestions. Images are processed locally and never sent anywhere.</string>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>OpenSuggest needs accessibility access to insert suggestions into any application.</string>
+    <key>NSPasteboardUsageDescription</key>
+    <string>OpenSuggest reads your clipboard to incorporate context into completions, improving suggestion relevance. Clipboard contents are processed locally and never stored.</string>
+</dict>
+</plist>

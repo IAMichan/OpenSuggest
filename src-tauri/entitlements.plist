@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Disable sandbox for local desktop tool (required for screen capture, accessibility, shell) -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <!-- Allow outbound network connections to localhost (Ollama) -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Allow reading user-selected files -->
+    <key>com.apple.security.files.user-selected.read-only</key>
+    <true/>
+    <!-- Allow writing to app data -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <!-- Inherit parent app permissions for child processes -->
+    <key>com.apple.security.inherit</key>
+    <true/>
+</dict>
+</plist>
