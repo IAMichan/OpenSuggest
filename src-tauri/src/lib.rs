@@ -360,10 +360,14 @@ async fn ollama_install(window: Window) -> Result<(), String> {
 }
 
 /// Start de gebundelde Ollama server op poort 11435.
-/// Geeft de URL terug waarop de server luistert.
+/// Gebruikt een schrijfbaare AppData map voor modellen en symlinks voor de gebundelde bestanden.
 #[command]
 async fn start_bundled_ollama(app: AppHandle, state: State<'_, AppState>) -> Result<String, String> {
-    const BUNDLED_PORT: &str = "127.0.0.1:11435";
+    use std::fs;
+    use std::process::{Command, Stdio};
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     const BUNDLED_URL: &str = "http://127.0.0.1:11435";
 
     // Al draaiend? Geef URL meteen terug.
@@ -374,49 +378,86 @@ async fn start_bundled_ollama(app: AppHandle, state: State<'_, AppState>) -> Res
         .await
         .is_ok()
     {
-        *state.bundled_ollama_url.lock().unwrap() = BUNDLED_URL.to_string();
         return Ok(BUNDLED_URL.to_string());
     }
 
-    // Bepaal pad naar de gebundelde binary
     let resource_dir = app
         .path()
         .resource_dir()
         .map_err(|e| format!("Kan resource-map niet vinden: {}", e))?;
 
     let binary_path = resource_dir.join("ollama");
-    let models_dir   = resource_dir.join("ollama_models");
+    
+    // Bepaal een SCHRIJFBARE map voor modellen (Application Support/OpenSuggest/models)
+    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let models_dir = app_data_dir.join("models");
+    
+    // Zorg dat de mappenstructuur bestaat
+    fs::create_dir_all(&models_dir).map_err(|e| format!("Kan models map niet maken: {}", e))?;
+    fs::create_dir_all(models_dir.join("blobs")).map_err(|e| e.to_string())?;
+    fs::create_dir_all(models_dir.join("manifests/registry.ollama.ai/library/gemma2")).map_err(|e| e.to_string())?;
 
-    if !binary_path.exists() {
-        return Err(format!("Gebundelde Ollama binary niet gevonden: {:?}", binary_path));
+    // SYMLINK TRICK: Koppel de gebundelde bestanden aan de schrijfmap
+    let bundled_blobs = resource_dir.join("ollama_models/blobs");
+    let bundled_manifests = resource_dir.join("ollama_models/manifests/registry.ollama.ai/library/gemma2");
+
+    // Link de blobs (de grote model-data bestanden)
+    if bundled_blobs.exists() {
+        if let Ok(entries) = fs::read_dir(bundled_blobs) {
+            for entry in entries.flatten() {
+                let target = models_dir.join("blobs").join(entry.file_name());
+                if !target.exists() {
+                    #[cfg(unix)]
+                    let _ = symlink(entry.path(), target);
+                }
+            }
+        }
     }
 
-    // Zorg dat de binary uitvoerbaar is (nodig na eerste uitpak door Tauri)
+    // Link de manifest (het recept-bestand van Gemma 2 2b)
+    let gemma_manifest_src = bundled_manifests.join("2b");
+    let gemma_manifest_dest = models_dir.join("manifests/registry.ollama.ai/library/gemma2/2b");
+    if gemma_manifest_src.exists() && !gemma_manifest_dest.exists() {
+        #[cfg(unix)]
+        let _ = symlink(gemma_manifest_src, gemma_manifest_dest);
+    }
+
+    // Zorg dat de binary uitvoerbaar is
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&binary_path)
-            .map_err(|e| e.to_string())?
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&binary_path, perms).map_err(|e| e.to_string())?;
+        if let Ok(metadata) = fs::metadata(&binary_path) {
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(&binary_path, perms);
+        }
     }
 
-    // Start de server als achtergrondproces
-    let child = std::process::Command::new(&binary_path)
+    // Stop een eventuele oude instantie
+    {
+        let mut process_lock = state.ollama_process.lock().map_err(|e| e.to_string())?;
+        if let Some(mut child) = process_lock.take() {
+            let _ = child.kill();
+        }
+    }
+
+    // Start de nieuwe instantie op poort 11435
+    let child = Command::new(&binary_path)
         .arg("serve")
-        .env("OLLAMA_HOST", BUNDLED_PORT)
+        .env("OLLAMA_HOST", "127.0.0.1:11435")
         .env("OLLAMA_MODELS", &models_dir)
-        // Voorkom dat de server een venster opent
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("Kan gebundelde Ollama niet starten: {}", e))?;
+        .map_err(|e| format!("Fout bij starten van gebundelde Ollama: {}", e))?;
 
-    *state.ollama_process.lock().unwrap() = Some(child);
-    *state.bundled_ollama_url.lock().unwrap() = BUNDLED_URL.to_string();
+    // Bewaar het proces in de state
+    {
+        let mut process_lock = state.ollama_process.lock().map_err(|e| e.to_string())?;
+        *process_lock = Some(child);
+    }
 
-    // Wacht maximaal 20 seconden tot de server klaar is
+    // Wacht tot de server klaar is
     for _ in 0..40 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         if reqwest::Client::new()
@@ -430,7 +471,7 @@ async fn start_bundled_ollama(app: AppHandle, state: State<'_, AppState>) -> Res
         }
     }
 
-    Err("Gebundelde Ollama server is niet op tijd gestart (timeout 20s)".to_string())
+    Err("Ollama server startte niet op tijd.".to_string())
 }
 
 #[command]
