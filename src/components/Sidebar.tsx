@@ -3,7 +3,6 @@ import {
   Settings, Cpu, Zap, Shield, Power, MonitorSmartphone,
   Clock, Layout, Keyboard, BarChart2
 } from 'lucide-react';
-import { motion } from 'motion/react';
 import { APP_VERSION } from '../constants';
 
 const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
@@ -45,10 +44,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isEnab
             </h1>
           </div>
           <div className="flex items-center gap-2 ml-0.5">
-            <motion.div
-              animate={{ opacity: [1, 0.3, 1] }}
-              transition={{ duration: 2, repeat: Infinity }}
-              className={`w-1.5 h-1.5 rounded-full ${isEnabled ? 'bg-white' : 'bg-white/20'}`}
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${isEnabled ? 'bg-white animate-pulse' : 'bg-white/20'}`}
             />
             <p className="text-[9px] text-white/25 uppercase tracking-[0.4em] font-black">
               v{APP_VERSION}
@@ -68,16 +65,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isEnab
             <button
               key={item.id}
               onClick={() => onTabChange(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group ${
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors duration-100 group ${
                 isActive
-                  ? 'bg-white text-black shadow-[0_8px_24px_rgba(255,255,255,0.08)]'
+                  ? 'bg-white text-black'
                   : 'text-white/30 hover:text-white/70 hover:bg-white/[0.04]'
               }`}
             >
               <item.icon
-                className={`w-4 h-4 flex-shrink-0 transition-transform duration-300 ${
-                  isActive ? 'text-black' : 'group-hover:scale-110'
-                }`}
+                className={`w-4 h-4 shrink-0 ${isActive ? 'text-black' : ''}`}
               />
               <span className="text-xs font-display font-bold uppercase tracking-tight truncate">
                 {item.label}

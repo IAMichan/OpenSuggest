@@ -1,6 +1,5 @@
 import React from 'react';
 import { AppStatus } from '../types';
-import { motion } from 'motion/react';
 
 interface StatusIndicatorProps {
   status: AppStatus;
@@ -18,11 +17,7 @@ export const StatusIndicator: React.FC<StatusIndicatorProps> = ({ status }) => {
 
   return (
     <div className={current.badge} id="status-indicator">
-      <motion.div
-        animate={{ opacity: [0.4, 1, 0.4] }}
-        transition={{ duration: 2, repeat: Infinity }}
-        className={`w-1.5 h-1.5 rounded-full ${current.color}`}
-      />
+      <div className={`w-1.5 h-1.5 rounded-full animate-pulse ${current.color}`} />
       {current.text}
     </div>
   );

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Minus, Square } from 'lucide-react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 
 const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
@@ -7,18 +8,9 @@ const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgen
 export const TitleBar: React.FC = () => {
   if (!isDesktop) return null;
 
-  const handleMinimize = async () => {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().minimize();
-  };
-  const handleMaximize = async () => {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().toggleMaximize();
-  };
-  const handleClose = async () => {
-    const { getCurrentWindow } = await import('@tauri-apps/api/window');
-    getCurrentWindow().close();
-  };
+  const handleMinimize = () => { getCurrentWindow().minimize(); };
+  const handleMaximize = () => { getCurrentWindow().toggleMaximize(); };
+  const handleClose = () => { getCurrentWindow().close(); };
 
   // On macOS: render custom traffic lights absolutely positioned over the sidebar
   if (isMac) {
@@ -34,7 +26,7 @@ export const TitleBar: React.FC = () => {
   // Windows / Linux: classic top bar with controls on the right
   return (
     <div
-      className="h-9 w-full flex items-center justify-between bg-black/60 backdrop-blur-md border-b border-white/[0.04] select-none flex-shrink-0"
+      className="h-9 w-full flex items-center justify-between bg-black border-b border-white/4 select-none shrink-0"
       data-tauri-drag-region
     >
       <div

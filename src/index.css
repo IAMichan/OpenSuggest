@@ -1,10 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;700;900&family=JetBrains+Mono:wght@400;700&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Outfit", var(--font-sans);
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", monospace;
 
   --color-primary: oklch(1 0 0);
   --color-primary-foreground: oklch(0 0 0);
@@ -24,6 +23,16 @@
 @layer base {
   *, *::before, *::after { box-sizing: border-box; }
 
+  html, body {
+    height: 100%;
+    width: 100%;
+  }
+
+  #root {
+    height: 100%;
+    width: 100%;
+  }
+
   body {
     @apply bg-background text-foreground antialiased;
     selection-background-color: rgba(255,255,255,0.12);
@@ -37,6 +46,12 @@
   }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
 
+  /* Promote scrollable areas to their own GPU layer for smooth scrolling */
+  .overflow-y-auto, .overflow-y-scroll {
+    -webkit-overflow-scrolling: touch;
+    will-change: transform;
+  }
+
   input[type="range"] {
     @apply accent-white cursor-pointer;
   }
@@ -45,15 +60,15 @@
 /* ── Utility classes ─────────────────────────────────────────────────────── */
 
 .glass-card {
-  @apply bg-card/95 backdrop-blur-sm border border-border/50 rounded-xl shadow-lg transition-all duration-300;
+  @apply bg-card border border-border/50 rounded-xl;
 }
 
 .ipulse-button-primary {
-  @apply flex items-center justify-center px-6 py-2 bg-primary text-primary-foreground rounded-full font-bold transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none hover:shadow-lg;
+  @apply flex items-center justify-center px-6 py-2 bg-primary text-primary-foreground rounded-full font-bold transition-colors active:scale-95 disabled:opacity-50 disabled:pointer-events-none;
 }
 
 .ipulse-button-secondary {
-  @apply flex items-center justify-center px-4 py-2 bg-muted text-foreground rounded-lg font-medium transition-all active:scale-95 border border-border/50 hover:bg-muted/80;
+  @apply flex items-center justify-center px-4 py-2 bg-muted text-foreground rounded-lg font-medium transition-colors active:scale-95 border border-border/50 hover:bg-muted/80;
 }
 
 .ipulse-input {
@@ -100,3 +115,35 @@
   50%       { transform: translateY(-6px); }
 }
 .float { animation: float 4s ease-in-out infinite; }
+
+/* ── Ghost editor — compositor-thread animations (no JS rAF) ─────────── */
+@keyframes ghost-dot-bounce {
+  0%, 100% { opacity: 0.2; transform: translateY(0); }
+  50%       { opacity: 1;   transform: translateY(-4px); }
+}
+.ghost-dot {
+  animation: ghost-dot-bounce 0.8s ease-in-out infinite;
+}
+
+@keyframes ghost-cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.ghost-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.1em;
+  background: rgba(255, 255, 255, 0.3);
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  border-radius: 2px;
+  animation: ghost-cursor-blink 0.9s step-end infinite;
+}
+
+@keyframes ghost-suggestion-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.ghost-suggestion-in {
+  animation: ghost-suggestion-fade 120ms ease-out forwards;
+}

@@ -6,10 +6,16 @@ export interface AIModel {
   type: 'speed' | 'balanced' | 'power';
   status: 'available' | 'downloading' | 'downloaded';
   progress?: number;
+  downloadStatus?: string;
+  downloadedBytes?: number;
+  totalBytes?: number;
   ollamaId?: string;
   diskSize?: number;
   minRamGb?: number;
   recommended?: boolean;
+  ggufFilename?: string;
+  ggufUrl?: string;
+  requiresAuth?: boolean;
 }
 
 export type AppStatus = 'ready' | 'loading' | 'error' | 'paused';
@@ -85,6 +91,8 @@ export interface AppSettings {
   blocklist: BlocklistEntry[];
   // Downloaded models
   downloadedModelIds: string[];
+  // HuggingFace token voor gated modellen
+  huggingFaceToken: string;
   // Setup
   setupComplete: boolean;
 }

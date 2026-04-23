@@ -7,16 +7,188 @@ use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{command, AppHandle, Emitter, Manager, State, Window};
 
+// ── In-process LLM engine imports ────────────────────────────────────────────
+use llama_cpp_2::{
+    context::{LlamaContext, params::LlamaContextParams},
+    llama_backend::LlamaBackend,
+    llama_batch::LlamaBatch,
+    model::{params::LlamaModelParams, AddBos, LlamaModel},
+    sampling::LlamaSampler,
+};
+#[allow(deprecated)]
+use llama_cpp_2::model::Special;
+use std::num::NonZeroU32;
+use std::sync::mpsc;
+use tokio::sync::oneshot;
+
+// ─────────────────────────────────── LLM State ───────────────────────────────
+
+/// Berichten naar de inference thread.
+enum LlmMsg {
+    Load {
+        path: String,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
+    Complete {
+        prompt: String,
+        max_tokens: usize,
+        reply: oneshot::Sender<Result<String, String>>,
+    },
+}
+
+/// Start een dedicated inference thread die het model in geheugen houdt.
+/// De LlamaContext wordt eenmalig aangemaakt bij het laden en hergebruikt voor alle completions,
+/// zodat de 500+ MiB Metal compute buffer niet bij elke suggestie opnieuw gealloceerd hoeft.
+fn spawn_llm_thread() -> mpsc::SyncSender<LlmMsg> {
+    let (tx, rx) = mpsc::sync_channel::<LlmMsg>(4);
+
+    std::thread::Builder::new()
+        .name("llm-inference".into())
+        .spawn(move || {
+            let backend = match LlamaBackend::init() {
+                Ok(b) => b,
+                Err(e) => { eprintln!("LLM: backend init mislukt: {e}"); return; }
+            };
+
+            let n_ctx_val = 512u32;
+            let cpu_threads = std::thread::available_parallelism()
+                .map(|n| n.get() as i32).unwrap_or(4).min(8);
+
+            // SAFETY: `cached_ctx` wordt ALTIJD gedropped vóór `loaded` wordt aangepast.
+            // We verlengen de lifetime handmatig; de pointer blijft geldig zolang `loaded`
+            // het model bevat en wij de invariant handhaven.
+            let mut loaded: Option<Box<LlamaModel>> = None;
+            let mut cached_ctx: Option<LlamaContext<'static>> = None;
+
+            while let Ok(msg) = rx.recv() {
+                match msg {
+                    LlmMsg::Load { path, reply } => {
+                        drop(cached_ctx.take()); // ctx EERST droppen, dan model
+
+                        let params = LlamaModelParams::default()
+                            .with_n_gpu_layers(1_000_000);
+
+                        let result = LlamaModel::load_from_file(
+                            &backend,
+                            std::path::Path::new(&path),
+                            &params,
+                        ).map_err(|e| e.to_string());
+
+                        match result {
+                            Ok(model) => {
+                                loaded = Some(Box::new(model));
+                                // SAFETY: Box<LlamaModel> leeft op de heap — stabiel adres.
+                                // cached_ctx wordt altijd gedropped vóór loaded wordt gewijzigd.
+                                let model_ref: &'static LlamaModel = unsafe {
+                                    &*(&**loaded.as_ref().unwrap() as *const LlamaModel)
+                                };
+                                let ctx_params = LlamaContextParams::default()
+                                    .with_n_ctx(Some(NonZeroU32::new(n_ctx_val).unwrap()))
+                                    .with_n_threads(cpu_threads)
+                                    .with_n_threads_batch(cpu_threads);
+                                if let Ok(ctx) = model_ref.new_context(&backend, ctx_params) {
+                                    // SAFETY: zie bovenstaande invariant
+                                    cached_ctx = Some(unsafe {
+                                        std::mem::transmute::<LlamaContext<'_>, LlamaContext<'static>>(ctx)
+                                    });
+                                }
+                                let _ = reply.send(Ok(()));
+                            }
+                            Err(e) => { let _ = reply.send(Err(e)); }
+                        }
+                    }
+
+                    LlmMsg::Complete { prompt, max_tokens, reply } => {
+                        let result = match (&loaded, &mut cached_ctx) {
+                            (Some(model), Some(ctx)) => {
+                                llm_run_reuse(model, ctx, n_ctx_val as usize, &prompt, max_tokens)
+                            }
+                            _ => Err("Geen model geladen".to_string()),
+                        };
+                        let _ = reply.send(result);
+                    }
+                }
+            }
+
+            // Juiste drop-volgorde bij thread exit
+            drop(cached_ctx);
+            drop(loaded);
+        })
+        .expect("kan inference thread niet starten");
+
+    tx
+}
+
+/// Voert één completion uit met een hergebruikte context (geen heralloc van Metal buffers).
+/// Elke aanroep start vanaf positie 0 zodat de KV-cache impliciet wordt overschreven.
+#[allow(deprecated)]
+fn llm_run_reuse(
+    model: &LlamaModel,
+    ctx: &mut LlamaContext<'_>,
+    n_ctx: usize,
+    prompt: &str,
+    max_tokens: usize,
+) -> Result<String, String> {
+    let tokens = model.str_to_token(prompt, AddBos::Always).map_err(|e| e.to_string())?;
+    if tokens.is_empty() { return Ok(String::new()); }
+
+    let n_prompt = tokens.len();
+    if n_prompt >= n_ctx { return Err("Prompt te lang".to_string()); }
+
+    // Wis de KV-cache zodat de nieuwe sequentie vanaf positie 0 kan starten
+    ctx.clear_kv_cache();
+
+    let mut batch = LlamaBatch::new(n_ctx, 1);
+
+    // Verwerk alle prompt-tokens in één batch (één forward pass)
+    for (i, &tok) in tokens.iter().enumerate() {
+        batch.add(tok, i as i32, &[0], i == n_prompt - 1).map_err(|e| e.to_string())?;
+    }
+    ctx.decode(&mut batch).map_err(|e| e.to_string())?;
+
+    let mut output = String::new();
+    let mut sampler = LlamaSampler::greedy();
+    let mut pos = n_prompt;
+
+    for _ in 0..max_tokens {
+        let token = sampler.sample(ctx, -1);
+        sampler.accept(token);
+
+        if model.is_eog_token(token) { break; }
+
+        let piece = model.token_to_str(token, Special::Tokenize).unwrap_or_default();
+
+        if piece.contains("\n\n") || piece.contains("<end_of_turn>") || piece.contains("<|") { break; }
+        output.push_str(&piece);
+
+        // Stop na een volledige zin (check op de geaccumuleerde output, niet op de losse token)
+        if output.len() > 20 {
+            let t = output.trim_end();
+            if t.ends_with('.') || t.ends_with('!') || t.ends_with('?') { break; }
+        }
+
+        if pos >= n_ctx - 1 { break; }
+        batch.clear();
+        batch.add(token, pos as i32, &[0], true).map_err(|e| e.to_string())?;
+        ctx.decode(&mut batch).map_err(|e| e.to_string())?;
+        pos += 1;
+    }
+
+    Ok(output.trim().to_string())
+}
+
 // ─────────────────────────────────── State ────────────────────────────────────
 
 struct AppState {
     db: Mutex<Option<Connection>>,
     screen_context: Mutex<String>,
     blocklist: Mutex<Vec<BlocklistEntry>>,
-    /// Bijgehouden child-process van de gebundelde Ollama server
+    /// Gebundelde Ollama server (fallback, wordt uitgefaseerd)
     ollama_process: Mutex<Option<std::process::Child>>,
-    /// De URL die de gebundelde Ollama server gebruikt (poort 11435)
-    bundled_ollama_url: Mutex<String>,
+    /// In-process LLM inference thread
+    infer_tx: Mutex<Option<mpsc::SyncSender<LlmMsg>>>,
+    /// Bestandsnaam van het geladen model (None = nog niets geladen)
+    loaded_model: Mutex<Option<String>>,
 }
 
 // ────────────────────────────────── Types ─────────────────────────────────────
@@ -119,23 +291,61 @@ async fn ollama_pull_model(
 
     let payload = serde_json::json!({ "name": model_id, "stream": true });
 
-    let response = reqwest::Client::new()
-        .post(format!("{}/api/pull", ollama_url))
-        .json(&payload)
-        .timeout(std::time::Duration::from_secs(3600))
-        .send()
-        .await
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(60))
+        .timeout(std::time::Duration::from_secs(7200))
+        .build()
         .map_err(|e| e.to_string())?;
 
+    let response = client
+        .post(format!("{}/api/pull", ollama_url))
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| {
+            let msg = format!("Kan Ollama niet bereiken: {}", e);
+            let _ = window.emit("ollama-pull-progress", serde_json::json!({
+                "model": model_id, "status": "error", "error": msg, "progress": 0,
+            }));
+            msg
+        })?;
+
+    if !response.status().is_success() {
+        let status_code = response.status().as_u16();
+        let body = response.text().await.unwrap_or_default();
+        let error_msg = serde_json::from_str::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|j| j["error"].as_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| format!("HTTP {}", status_code));
+        let _ = window.emit("ollama-pull-progress", serde_json::json!({
+            "model": model_id, "status": "error", "error": error_msg, "progress": 0,
+        }));
+        return Err(error_msg);
+    }
+
     let mut stream = response.bytes_stream();
+    // Buffer to handle NDJSON lines that span multiple HTTP chunks
+    let mut line_buf = String::new();
 
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("Stream error: {}", e))?;
-        let text = String::from_utf8_lossy(&chunk);
+        line_buf.push_str(&String::from_utf8_lossy(&chunk));
 
-        for line in text.lines() {
+        // Process all complete lines (split on newline, keep remainder in buffer)
+        while let Some(newline_pos) = line_buf.find('\n') {
+            let line = line_buf[..newline_pos].trim().to_string();
+            line_buf = line_buf[newline_pos + 1..].to_string();
+
             if line.is_empty() { continue; }
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&line) {
+                // Ollama can send {"error":"..."} without a "status" field
+                if let Some(err) = json["error"].as_str() {
+                    let _ = window.emit("ollama-pull-progress", serde_json::json!({
+                        "model": model_id, "status": "error", "error": err, "progress": 0,
+                    }));
+                    return Err(err.to_string());
+                }
+
                 let status = json["status"].as_str().unwrap_or("").to_string();
                 let completed = json["completed"].as_u64();
                 let total = json["total"].as_u64();
@@ -145,23 +355,19 @@ async fn ollama_pull_model(
                     _ => 0,
                 };
 
-                // Log voortgang naar terminal voor debugging
-                if progress % 10 == 0 {
-                    println!("Pulling {}: {}% ({})", model_id, progress, status);
-                }
-
                 let _ = window.emit(
                     "ollama-pull-progress",
                     serde_json::json!({
                         "model": model_id,
                         "status": status,
                         "progress": progress,
+                        "completed": completed,
+                        "total": total,
                     }),
                 );
 
-                if status == "success" { 
-                    println!("Model {} succesvol gedownload!", model_id);
-                    return Ok(()); 
+                if status == "success" {
+                    return Ok(());
                 }
             }
         }
@@ -180,6 +386,7 @@ async fn ollama_delete_model(model_id: String, ollama_url: String) -> Result<(),
         .map_err(|e| e.to_string())?;
     Ok(())
 }
+
 
 // ──────────────────── Chat API — works with ALL Ollama models ────────────────
 
@@ -223,11 +430,13 @@ async fn ollama_chat(
         "stream": false,
         "keep_alive": "10m",
         "options": {
-            "temperature": 0.2,
-            "num_predict": 15,
-            "top_p": 0.85,
-            "repeat_penalty": 1.1,
-            "stop": [".", "\n", "\n\n"]   // Stop bij punt of nieuwe regel
+            "temperature": 0.15,
+            "num_predict": 80,
+            "top_p": 0.9,
+            "repeat_penalty": 1.2,
+            "num_gpu": -1,
+            "num_ctx": 2048,
+            "stop": ["<end_of_turn>", "\n\n", "###", "<|"]
         }
     });
 
@@ -244,23 +453,32 @@ async fn ollama_chat(
     // /api/chat response zit in message.content
     let raw = json["message"]["content"].as_str().unwrap_or("").to_string();
 
-    // Clean up: collapse whitespace/newlines into single spaces
+    // Strip cursor annotation if model echoed it back
+    let raw = raw.replace("[COMPLETE FROM HERE]", "");
+
+    // Collapse whitespace/newlines into single spaces
     let collapsed = raw
         .replace('\n', " ")
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ");
 
-    // Strip common model artifacts from the start of the output:
-    // leading ellipses ("...", "…"), quotes (", ", ' '), labels ("AI:", "Answer:"),
-    // and markdown bold/italic markers.
+    // Strip common model artifacts
     let cleaned = collapsed
-        .trim_start_matches(|c: char| c == '.' || c == '\u{2026}')  // strip leading . and …
-        .trim_start_matches(|c: char| c == ',' || c == ';')          // strip leading , ;
-        .trim_start_matches(|c: char| c == '"' || c == '\'' || c == '\u{201C}' || c == '\u{2018}') // strip leading quotes
-        .trim_start_matches('*')    // strip markdown bold/italic
-        .trim_start()               // strip any leftover leading whitespace
+        .trim_start_matches(|c: char| c == '.' || c == '\u{2026}')
+        .trim_start_matches(|c: char| c == ',' || c == ';')
+        .trim_start_matches(|c: char| c == '"' || c == '\'' || c == '\u{201C}' || c == '\u{2018}')
+        .trim_start_matches('*')
+        .trim_start()
         .to_string();
+
+    // Reject output that looks like the model is explaining itself
+    let lower = cleaned.to_lowercase();
+    if lower.starts_with("sure") || lower.starts_with("here") || lower.starts_with("of course")
+        || lower.starts_with("i'll") || lower.starts_with("i will") || lower.starts_with("as an ai")
+    {
+        return Ok(String::new());
+    }
 
     Ok(cleaned)
 }
@@ -387,39 +605,39 @@ async fn start_bundled_ollama(app: AppHandle, state: State<'_, AppState>) -> Res
         .map_err(|e| format!("Kan resource-map niet vinden: {}", e))?;
 
     let binary_path = resource_dir.join("ollama");
-    
-    // Bepaal een SCHRIJFBARE map voor modellen (Application Support/OpenSuggest/models)
-    let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    let models_dir = app_data_dir.join("models");
-    
-    // Zorg dat de mappenstructuur bestaat
-    fs::create_dir_all(&models_dir).map_err(|e| format!("Kan models map niet maken: {}", e))?;
-    fs::create_dir_all(models_dir.join("blobs")).map_err(|e| e.to_string())?;
-    fs::create_dir_all(models_dir.join("manifests/registry.ollama.ai/library/gemma2")).map_err(|e| e.to_string())?;
 
-    // SYMLINK TRICK: Koppel de gebundelde bestanden aan de schrijfmap
+    // Gebruik ~/.ollama/models — de standaardlocatie van Ollama.
+    // Alle eerder gedownloade modellen staan hier al.
+    let home_dir = std::env::var("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| app.path().app_data_dir().unwrap_or_default());
+    let models_dir = home_dir.join(".ollama/models");
+
+    // Zorg dat de mappenstructuur bestaat
+    fs::create_dir_all(models_dir.join("blobs")).unwrap_or(());
+    fs::create_dir_all(models_dir.join("manifests/registry.ollama.ai/library/gemma2")).unwrap_or(());
+
+    // Symlink de meegebundelde gemma2:2b bestanden als ze er nog niet zijn
     let bundled_blobs = resource_dir.join("ollama_models/blobs");
     let bundled_manifests = resource_dir.join("ollama_models/manifests/registry.ollama.ai/library/gemma2");
 
-    // Link de blobs (de grote model-data bestanden)
     if bundled_blobs.exists() {
-        if let Ok(entries) = fs::read_dir(bundled_blobs) {
+        if let Ok(entries) = fs::read_dir(&bundled_blobs) {
             for entry in entries.flatten() {
                 let target = models_dir.join("blobs").join(entry.file_name());
                 if !target.exists() {
                     #[cfg(unix)]
-                    let _ = symlink(entry.path(), target);
+                    let _ = symlink(entry.path(), &target);
                 }
             }
         }
     }
 
-    // Link de manifest (het recept-bestand van Gemma 2 2b)
     let gemma_manifest_src = bundled_manifests.join("2b");
     let gemma_manifest_dest = models_dir.join("manifests/registry.ollama.ai/library/gemma2/2b");
     if gemma_manifest_src.exists() && !gemma_manifest_dest.exists() {
         #[cfg(unix)]
-        let _ = symlink(gemma_manifest_src, gemma_manifest_dest);
+        let _ = symlink(&gemma_manifest_src, &gemma_manifest_dest);
     }
 
     // Zorg dat de binary uitvoerbaar is
@@ -441,7 +659,7 @@ async fn start_bundled_ollama(app: AppHandle, state: State<'_, AppState>) -> Res
         }
     }
 
-    // Start de nieuwe instantie op poort 11435
+    // Start de nieuwe instantie op poort 11435 met de standaard ~/.ollama/models map
     let child = Command::new(&binary_path)
         .arg("serve")
         .env("OLLAMA_HOST", "127.0.0.1:11435")
@@ -457,12 +675,12 @@ async fn start_bundled_ollama(app: AppHandle, state: State<'_, AppState>) -> Res
         *process_lock = Some(child);
     }
 
-    // Wacht tot de server klaar is
-    for _ in 0..40 {
+    // Wacht maximaal 8 seconden op de server
+    for _ in 0..16 {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         if reqwest::Client::new()
             .get(format!("{}/api/tags", BUNDLED_URL))
-            .timeout(std::time::Duration::from_secs(1))
+            .timeout(std::time::Duration::from_millis(500))
             .send()
             .await
             .is_ok()
@@ -551,6 +769,186 @@ fn ollama_is_installed() -> bool {
         std::path::Path::new("/usr/local/bin/ollama").exists()
             || std::path::Path::new("/opt/homebrew/bin/ollama").exists()
     }
+}
+
+// ─────────────────────── In-Process LLM Commands ─────────────────────────────
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct LocalModel {
+    pub filename: String,
+    pub size_gb: f64,
+    pub path: String,
+}
+
+fn get_models_dir_path(app: &AppHandle) -> std::path::PathBuf {
+    let data_dir = app.path().app_data_dir().unwrap_or_default();
+    let dir = data_dir.join("Models");
+    std::fs::create_dir_all(&dir).unwrap_or(());
+    dir
+}
+
+#[command]
+fn llm_get_models_dir(app: AppHandle) -> String {
+    get_models_dir_path(&app).to_string_lossy().to_string()
+}
+
+#[command]
+fn llm_list_local_models(app: AppHandle) -> Vec<LocalModel> {
+    let dir = get_models_dir_path(&app);
+    std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let path = e.path();
+            let name = path.file_name()?.to_string_lossy().to_string();
+            if !name.ends_with(".gguf") { return None; }
+            let size = e.metadata().ok()?.len();
+            Some(LocalModel {
+                filename: name,
+                size_gb: size as f64 / 1e9,
+                path: path.to_string_lossy().to_string(),
+            })
+        })
+        .collect()
+}
+
+#[command]
+async fn llm_download_gguf(
+    url: String,
+    filename: String,
+    hf_token: String,
+    app: AppHandle,
+    window: Window,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+
+    let dest = get_models_dir_path(&app).join(&filename);
+    if dest.exists() {
+        return Ok(dest.to_string_lossy().to_string());
+    }
+
+    let _ = window.emit("gguf-download-progress", serde_json::json!({
+        "filename": &filename, "progress": 0, "status": "connecting"
+    }));
+
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(7200))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut request = client.get(&url).header("User-Agent", "OpenSuggest/2.0");
+    if !hf_token.trim().is_empty() {
+        request = request.header("Authorization", format!("Bearer {}", hf_token.trim()));
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("Verbinding mislukt: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("HTTP {}", response.status()));
+    }
+
+    let total = response.content_length().unwrap_or(0);
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+    let mut last_progress: u32 = u32::MAX;
+
+    let tmp = dest.with_extension("gguf.tmp");
+    let raw_file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
+    let mut file = std::io::BufWriter::with_capacity(8 * 1024 * 1024, raw_file);
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| e.to_string())?;
+        std::io::Write::write_all(&mut file, &chunk).map_err(|e| e.to_string())?;
+        downloaded += chunk.len() as u64;
+        let progress = if total > 0 { (downloaded * 100 / total) as u32 } else { 0 };
+        // Only emit when the integer percentage actually changes — prevents rapid flicker
+        if progress != last_progress {
+            last_progress = progress;
+            let _ = window.emit("gguf-download-progress", serde_json::json!({
+                "filename": &filename,
+                "progress": progress,
+                "downloaded_gb": downloaded as f64 / 1e9,
+                "total_gb": total as f64 / 1e9,
+                "status": "downloading"
+            }));
+        }
+    }
+
+    std::io::Write::flush(&mut file).map_err(|e| e.to_string())?;
+    drop(file);
+    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    let _ = window.emit("gguf-download-progress", serde_json::json!({
+        "filename": &filename, "progress": 100, "status": "complete"
+    }));
+
+    Ok(dest.to_string_lossy().to_string())
+}
+
+#[command]
+async fn llm_load_model(
+    filename: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let path = get_models_dir_path(&app).join(&filename);
+    if !path.exists() {
+        return Err(format!("Model niet gevonden: {}", filename));
+    }
+    let tx = state.infer_tx.lock().map_err(|e| e.to_string())?
+        .clone().ok_or("LLM engine niet gestart")?;
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.send(LlmMsg::Load { path: path.to_string_lossy().to_string(), reply: reply_tx })
+        .map_err(|e| e.to_string())?;
+    let result = reply_rx.await.map_err(|e| e.to_string())?;
+    if result.is_ok() {
+        *state.loaded_model.lock().map_err(|e| e.to_string())? = Some(filename);
+    }
+    result
+}
+
+/// Geeft de bestandsnaam van het geladen model terug, of None als er niets geladen is.
+#[command]
+fn llm_get_loaded_model(state: State<'_, AppState>) -> Option<String> {
+    state.loaded_model.lock().ok().and_then(|l| l.clone())
+}
+
+#[command]
+async fn llm_complete(
+    system_prompt: String,
+    user_text: String,
+    max_tokens: u32,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let tx = state.infer_tx.lock().map_err(|e| e.to_string())?
+        .clone().ok_or("LLM engine niet gestart")?;
+
+    // Gemma instruction format
+    let prompt = format!(
+        "<start_of_turn>user\n{system_prompt}\n\n{user_text}<end_of_turn>\n<start_of_turn>model\n"
+    );
+
+    let (reply_tx, reply_rx) = oneshot::channel();
+    tx.send(LlmMsg::Complete { prompt, max_tokens: max_tokens as usize, reply: reply_tx })
+        .map_err(|e| e.to_string())?;
+    reply_rx.await.map_err(|e| e.to_string())?
+}
+
+// ─────────────────────────── Reveal Models Folder ────────────────────────────
+
+#[command]
+fn reveal_models_folder(app: AppHandle) {
+    let path = get_models_dir_path(&app);
+    #[cfg(target_os = "macos")]
+    { let _ = std::process::Command::new("open").arg(&path).spawn(); }
+    #[cfg(target_os = "linux")]
+    { let _ = std::process::Command::new("xdg-open").arg(&path).spawn(); }
+    #[cfg(target_os = "windows")]
+    { let _ = std::process::Command::new("explorer").arg(&path).spawn(); }
 }
 
 // ─────────────────────────────── Screen Commands ──────────────────────────────
@@ -1178,7 +1576,8 @@ pub fn run() {
                 screen_context: Mutex::new(String::new()),
                 blocklist: Mutex::new(Vec::new()),
                 ollama_process: Mutex::new(None),
-                bundled_ollama_url: Mutex::new(String::new()),
+                infer_tx: Mutex::new(Some(spawn_llm_thread())),
+                loaded_model: Mutex::new(None),
             });
             Ok(())
         })
@@ -1225,6 +1624,15 @@ pub fn run() {
             // Context Cache
             get_screen_context,
             set_screen_context,
+            // Models folder
+            reveal_models_folder,
+            // In-process LLM engine
+            llm_get_models_dir,
+            llm_list_local_models,
+            llm_download_gguf,
+            llm_load_model,
+            llm_get_loaded_model,
+            llm_complete,
         ])
         .build(tauri::generate_context!())
         .expect("fout bij opstarten van OpenSuggest")

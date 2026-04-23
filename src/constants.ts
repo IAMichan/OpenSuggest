@@ -5,76 +5,81 @@ export const APP_VERSION = '2.0.0';
 export const OLLAMA_TEXT_MODEL = 'llama3.2:3b';
 export const OLLAMA_VISION_MODEL = 'moondream';
 
+// Verified working HuggingFace download URLs (no authentication required)
+const HF = 'https://huggingface.co';
+
 export const MODELS: AIModel[] = [
   {
     id: 'qwen2.5-1.5b',
     ollamaId: 'qwen2.5:1.5b',
     name: 'Qwen 2.5 1.5B',
-    size: '1.0 GB',
-    description: 'Ultra-lightweight. Runs on low-spec hardware (< 8 GB RAM).',
+    size: '1.1 GB',
+    description: 'Ultra-lightweight. Best for older hardware (< 8 GB RAM).',
     type: 'speed',
     status: 'available',
     minRamGb: 4,
-  },
-  {
-    id: 'gemma2-2b',
-    ollamaId: 'gemma2:2b',
-    name: 'Gemma 2 2B',
-    size: '1.6 GB',
-    description: "Google's fastest small model. Best for everyday typing.",
-    type: 'speed',
-    status: 'available',
-    minRamGb: 6,
+    ggufFilename: 'Qwen2.5-1.5B-Instruct-Q5_K_M.gguf',
+    ggufUrl: `${HF}/bartowski/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/Qwen2.5-1.5B-Instruct-Q5_K_M.gguf`,
   },
   {
     id: 'llama3.2-3b',
     ollamaId: 'llama3.2:3b',
     name: 'Llama 3.2 3B',
-    size: '2.0 GB',
-    description: "Meta's efficient model. Great balance of speed and quality.",
-    type: 'balanced',
+    size: '2.2 GB',
+    description: "Meta's efficient 3B model. Fast and capable.",
+    type: 'speed',
     status: 'available',
-    minRamGb: 8,
+    minRamGb: 6,
+    ggufFilename: 'Llama-3.2-3B-Instruct-Q5_K_M.gguf',
+    ggufUrl: `${HF}/bartowski/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q5_K_M.gguf`,
   },
   {
-    id: 'phi4-mini',
-    ollamaId: 'phi4-mini',
-    name: 'Phi-4 Mini',
-    size: '2.5 GB',
-    description: "Microsoft's highly capable small model. Excellent reasoning.",
+    id: 'gemma3-4b',
+    ollamaId: 'gemma3:4b',
+    name: 'Gemma 3 4B',
+    size: '2.7 GB',
+    description: "Google's Gemma 3 4B — best quality for everyday typing. Recommended.",
     type: 'balanced',
     status: 'available',
     minRamGb: 8,
+    ggufFilename: 'gemma-3-4b-it-UD-Q5_K_XL.gguf',
+    ggufUrl: `${HF}/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-UD-Q5_K_XL.gguf`,
+  },
+  {
+    id: 'gemma3-4b-q4',
+    ollamaId: 'gemma3:4b-q4',
+    name: 'Gemma 3 4B (Light)',
+    size: '2.3 GB',
+    description: "Gemma 3 4B Q4 — smaller download, still very capable.",
+    type: 'balanced',
+    status: 'available',
+    minRamGb: 6,
+    ggufFilename: 'gemma-3-4b-it-Q4_K_M.gguf',
+    ggufUrl: `${HF}/unsloth/gemma-3-4b-it-GGUF/resolve/main/gemma-3-4b-it-Q4_K_M.gguf`,
   },
   {
     id: 'gemma4-e4b',
     ollamaId: 'gemma3:4b',
     name: 'Gemma 4 E4B',
     size: '6.2 GB',
-    description: "Google's Gemma 4 (4B). Excellent quality with modern architecture.",
-    type: 'balanced',
+    description: "Google's Gemma 4 — exact same model as Cotypist. Best quality.",
+    type: 'power',
     status: 'available',
     minRamGb: 12,
+    ggufFilename: 'gemma-4-E4B-it-UD-Q5_K_XL.gguf',
+    ggufUrl: `${HF}/unsloth/gemma-4-E4B-it-GGUF/resolve/main/gemma-4-E4B-it-UD-Q5_K_XL.gguf`,
   },
   {
     id: 'mistral-7b',
     ollamaId: 'mistral:7b',
     name: 'Mistral 7B',
-    size: '4.1 GB',
-    description: 'Industry-leading balance of speed and reasoning.',
-    type: 'balanced',
-    status: 'available',
-    minRamGb: 12,
-  },
-  {
-    id: 'gemma2-9b',
-    ollamaId: 'gemma2:9b',
-    name: 'Gemma 2 9B',
-    size: '5.5 GB',
-    description: 'Premium quality completions for power users.',
+    size: '4.8 GB',
+    description: 'Industry-standard 7B model. Excellent reasoning and writing.',
     type: 'power',
     status: 'available',
-    minRamGb: 16,
+    minRamGb: 12,
+    ggufFilename: 'Mistral-7B-Instruct-v0.3-Q5_K_M.gguf',
+    ggufUrl: `${HF}/bartowski/Mistral-7B-Instruct-v0.3-GGUF/resolve/main/Mistral-7B-Instruct-v0.3-Q5_K_M.gguf`,
   },
 ];
 
@@ -103,31 +108,29 @@ export const VISION_MODELS: AIModel[] = [
 
 /** Returns recommended model IDs based on available system RAM */
 export function getRecommendedModelIds(ramGb: number): string[] {
-  if (ramGb >= 32) return ['gemma2-9b', 'mistral-7b', 'gemma4-e4b'];
-  if (ramGb >= 16) return ['gemma4-e4b', 'mistral-7b', 'llama3.2-3b'];
-  if (ramGb >= 12) return ['gemma4-e4b', 'llama3.2-3b', 'phi4-mini'];
-  if (ramGb >= 8)  return ['llama3.2-3b', 'phi4-mini', 'gemma2-2b'];
-  if (ramGb >= 6)  return ['gemma2-2b', 'qwen2.5-1.5b'];
+  if (ramGb >= 12) return ['gemma4-e4b', 'gemma3-4b', 'llama3.2-3b'];
+  if (ramGb >= 8)  return ['gemma3-4b', 'llama3.2-3b'];
+  if (ramGb >= 6)  return ['gemma3-4b-q4', 'llama3.2-3b'];
   return ['qwen2.5-1.5b'];
 }
 
 /** Returns the best default model for the given RAM amount */
 export function getDefaultModelId(ramGb: number): string {
-  if (ramGb >= 16) return 'gemma4-e4b';
-  if (ramGb >= 8)  return 'llama3.2-3b';
-  if (ramGb >= 6)  return 'gemma2-2b';
+  if (ramGb >= 12) return 'gemma4-e4b';
+  if (ramGb >= 8)  return 'gemma3-4b';
+  if (ramGb >= 6)  return 'llama3.2-3b';
   return 'qwen2.5-1.5b';
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
-  version: 6,
+  version: 7,
   // Engine — gebundelde Ollama op poort 11435 (geen conflict met systeem-Ollama)
   modelId: 'gemma2-2b',
   visionModelId: 'moondream',
   ollamaUrl: 'http://127.0.0.1:11435',
   contextLength: 200,
   isEnabled: true,
-  triggerDelayMs: 150,
+  triggerDelayMs: 100,
   minCharsForSuggestion: 3,
   maxSuggestionLength: 80,
   // Theme
@@ -148,6 +151,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   blocklist: [],
   // Models — gemma2:2b is meegeleverd in de app-bundle (zero download)
   downloadedModelIds: ['gemma2-2b'],
+  // HuggingFace token voor gated modellen (optioneel)
+  huggingFaceToken: '',
   // Setup
   setupComplete: false,
 };
@@ -159,4 +164,4 @@ export const DOWNLOAD_LINKS = {
   linux_deb: 'https://github.com/opensuggest/opensuggest/releases/latest/download/OpenSuggest.deb',
 };
 
-export const STORAGE_KEY = 'opensuggest_settings_v6';
+export const STORAGE_KEY = 'opensuggest_settings_v7';

@@ -1,7 +1,3 @@
-/**
- * AI Service — local Ollama integration for real-time autocomplete.
- * Uses /api/chat for better compatibility with all models.
- */
 import { invoke } from '@tauri-apps/api/core';
 import { MODELS, VISION_MODELS } from '../constants';
 import { OllamaModel } from '../types';
@@ -72,93 +68,82 @@ export async function deleteModel(modelId: string, ollamaUrl: string): Promise<v
 
 // ─────────────────────────── Prompt Engineering ───────────────────────────────
 
-/**
- * Bouwt een sterk autocomplete-prompt dat het model stuurt naar korte,
- * inline vervolgingen — geen uitleg, geen aanhalingstekens, geen labels.
- */
 function buildMessages(
   text: string,
   screenContext: string,
   clipboardContext: string,
   historyContext: string,
-  isMidWord: boolean
 ): { system: string; userMessage: string } {
-  const contextLines: string[] = [];
-  if (screenContext)    contextLines.push(`Schermcontext: ${screenContext}`);
-  if (clipboardContext) contextLines.push(`Klembord: ${clipboardContext}`);
-  if (historyContext)   contextLines.push(`Schrijfstijl gebruiker: ${historyContext}`);
+  // Analyse de huidige tekst zodat het model weet waar het zit
+  const trimmed = text.trimEnd();
+  const lastSentenceMatch = trimmed.match(/[.!?]\s+([^.!?]*)$/);
+  const currentSentence = lastSentenceMatch ? lastSentenceMatch[1] : trimmed;
+  const isMidSentence = currentSentence.length > 0 && !/[.!?]$/.test(trimmed);
+  const endsWithSpace = text.endsWith(' ');
 
-  // Extract the partial word at the end so we can name it explicitly
-  const partialWordMatch = text.match(/\S+$/);
-  const partialWord = partialWordMatch ? partialWordMatch[0] : '';
+  const contextParts: string[] = [];
+  if (screenContext)    contextParts.push(`Screen context: ${screenContext}`);
+  if (clipboardContext) contextParts.push(`Clipboard: ${clipboardContext}`);
+  if (historyContext)   contextParts.push(`Writing style: ${historyContext.slice(0, 120)}`);
+
+  const task = isMidSentence
+    ? 'The user is mid-sentence. Output only the words that complete the current sentence.'
+    : 'The user finished a sentence. Write the next sentence only.';
 
   const system = [
-    'Je bent een low-latency autocomplete engine.',
-    '',
-    'Taak: Voltooi de tekst van de gebruiker direct vanaf het laatste karakter.',
-    '',
-    'Beperkingen:',
-    '- GEEN uitleg, GEEN beleefdheden, GEEN markdown.',
-    '- Output is alleen de tekstuele aanvulling.',
-    '- Stop onmiddellijk bij een punt (.) of nieuwe regel.',
-    isMidWord
-      ? `- Het laatste woord "${partialWord}" is ONVOLLEDIG. Geef ALLEEN de ontbrekende letters om het woord af te maken, dan eventueel een paar woorden verder.`
-      : '- Geef maximaal 3 tot 5 woorden terug voor maximale snelheid.',
-    '- Als de context onduidelijk is, geef dan geen output (leeg laten).',
-    '- Begin NOOIT met "...", "\u2026" of een andere ellips.',
-    '- Begin NOOIT met een spatie \u2014 spati\u00ebring wordt extern afgehandeld.',
-    '',
-    'Stijl: Kopieer exact het vocabulaire en de grammatica van de input.',
-    ...(contextLines.length
-      ? ['', ...contextLines]
-      : []),
+    'You are a text autocomplete engine. ' + task,
+    'Critical: output ONLY the raw continuation text. No preamble, no labels, no markdown.',
+    'Match the exact language (Dutch/English/etc) and writing style of the input. Maximum 25 words.',
+    ...(contextParts.length ? [contextParts.join(' | ')] : []),
   ].join('\n');
 
-  // Stuur de laatste 300 tekens voor betere kwaliteit
-  const contextWindow = text.length > 300 ? '\u2026' + text.slice(-300) : text;
+  // Last 500 chars — gives enough semantic context without overloading the prompt
+  const contextWindow = text.length > 500 ? '…' + text.slice(-500) : text;
+  // Send the text as-is; the model naturally continues from the end
+  const userMessage = contextWindow;
 
-  return {
-    system,
-    userMessage: contextWindow,
-  };
+  return { system, userMessage };
 }
 
 // ─────────────────────────── Smart Spacing ────────────────────────────────────
 
-/**
- * Determines the correct prefix to prepend to an AI suggestion so that it
- * connects naturally to the text the user has already typed.
- *
- * isMidWord = true  → the text ends on a partial word (e.g. "ka").
- *   The suggestion completes that word, so NO leading space is added.
- *
- * Examples:
- *   "En het"   + "is ook handig"  (midWord=false) → " is ook handig"
- *   "En het "  + "is ook handig"  (midWord=false) → "is ook handig"   (space already present)
- *   "teksten en ka" + "tten zijn"  (midWord=true)  → "tten zijn"       (completing the word)
- *   "klaar"    + ","              (midWord=false) → ","               (punctuation, no space)
- */
-export function smartPrefix(existingText: string, suggestion: string, isMidWord = false): string {
+export function smartPrefix(existingText: string, suggestion: string): string {
   if (!suggestion) return suggestion;
 
-  // Strip any accidental leading whitespace from the suggestion
-  const trimmed = suggestion.trimStart();
-  if (!trimmed) return suggestion;
+  // Verwijder overlappende tekst (bijv. als de AI de input herhaalt)
+  const maxOverlap = Math.min(existingText.length, suggestion.length, 150);
+  const existingLower = existingText.toLowerCase();
+  const suggestionLower = suggestion.toLowerCase();
 
-  // Mid-word: the suggestion directly continues the partial word — no space ever
-  if (isMidWord) return trimmed;
+  let overlapLength = 0;
+  for (let i = maxOverlap; i > 0; i--) {
+    if (existingLower.slice(-i) === suggestionLower.slice(0, i)) {
+      overlapLength = i;
+      break;
+    }
+  }
 
-  // If the suggestion starts with punctuation, no space before it
-  const startsWithPunctuation = /^[,\.!\?;:\-\u2026)]/.test(trimmed);
+  let processedSuggestion = suggestion;
+  if (overlapLength > 0) {
+    processedSuggestion = suggestion.slice(overlapLength);
+  }
+
+  // Strip [COMPLETE FROM HERE] als het model dit in de output meeneemt
+  processedSuggestion = processedSuggestion.replace(/\[COMPLETE FROM HERE\]/gi, '').trim();
+
+  const trimmed = processedSuggestion.trimStart();
+  if (!trimmed) return '';
+
+  // Geen spatie voor leestekens
+  const startsWithPunctuation = /^[,\.!\?;:\-…)]/.test(trimmed);
   if (startsWithPunctuation) return trimmed;
 
-  // If the existing text already ends with whitespace, no extra space needed
+  // Bestaande tekst eindigt al met whitespace
   if (/[\s\n\t]$/.test(existingText)) return trimmed;
 
-  // If the existing text ends with an opening bracket/quote, no space needed
-  if (/[([{"'\u00ab]$/.test(existingText)) return trimmed;
+  // Na openend haakje/aanhalingsteken geen spatie
+  if (/[([{"'«]$/.test(existingText)) return trimmed;
 
-  // Otherwise prepend a space (text ends on a complete word/punctuation)
   return ' ' + trimmed;
 }
 
@@ -202,17 +187,24 @@ export async function getCompletion(
     const model = MODELS.find((m) => m.id === modelId) || VISION_MODELS.find((m) => m.id === modelId);
     const ollamaModelId = model?.ollamaId ?? modelId;
 
-    // Detect whether the cursor is in the middle of a word
-    // (last char is a word character AND is not preceded by whitespace at the very end)
-    const isMidWord = /\S$/.test(text) && !/\s/.test(text.slice(-1));
-
     const { system, userMessage } = buildMessages(
       text,
       options.screenContext ?? '',
       options.clipboardContext ?? '',
-      options.historyContext ?? '',
-      isMidWord
+      options.historyContext ?? ''
     );
+
+    try {
+      // Probeer eerst in-process llama.cpp (geen server nodig)
+      const raw = await invoke<string>('llm_complete', {
+        systemPrompt: system,
+        userText: userMessage,
+        maxTokens: 40,
+      });
+      if (raw) return smartPrefix(text, raw);
+    } catch {
+      // Fallback naar Ollama als llm_complete niet beschikbaar is
+    }
 
     try {
       const raw = await invoke<string>('ollama_chat', {
@@ -222,10 +214,9 @@ export async function getCompletion(
         systemPrompt: system,
         images: options.images ?? [],
       });
-      // Apply smart spacing — skip leading space when completing a mid-word
-      return smartPrefix(text, raw, isMidWord);
+      return smartPrefix(text, raw);
     } catch (e) {
-      console.error('Ollama fout:', e);
+      console.error('AI fout:', e);
       return '';
     }
   }
@@ -236,7 +227,7 @@ export async function getCompletion(
 // ─────────────────────────── System Info ──────────────────────────────────────
 
 export async function getSystemRamGb(): Promise<number> {
-  if (!isDesktop) return 8; // redelijke standaard voor browser
+  if (!isDesktop) return 8;
   try {
     return await invoke<number>('get_system_ram_gb');
   } catch {

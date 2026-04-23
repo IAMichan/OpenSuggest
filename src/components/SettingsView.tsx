@@ -3,7 +3,7 @@ import { AppSettings, AIModel, BlocklistEntry, AllStats } from '../types';
 import {
   Shield, Download, CheckCircle2, Loader2, HardDrive, Trash2,
   Plus, X, BarChart2, Clock, Keyboard, Cpu, Monitor,
-  Clipboard, Globe, Star, Zap, AlertCircle
+  Clipboard, Globe, Star, Zap, AlertCircle, ChevronDown, FolderOpen, Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { invoke } from '@tauri-apps/api/core';
@@ -21,6 +21,7 @@ interface SettingsViewProps {
   onDeleteModel: (id: string) => void;
   activeSection: string;
   ramGb?: number;
+  onEngineStarted?: () => void;
 }
 
 // ── Toggle ────────────────────────────────────────────────────────────────────
@@ -71,10 +72,134 @@ const Row: React.FC<{ label: string; desc?: string; children: React.ReactNode }>
   </div>
 );
 
+// ── Model Selector Dropdown ───────────────────────────────────────────────────
+
+const ModelOption: React.FC<{
+  model: AIModel;
+  selected: boolean;
+  onSelect: () => void;
+  onDownload: (id: string) => void;
+}> = ({ model, selected, onSelect, onDownload }) => {
+  const isDownloaded = model.status === 'downloaded';
+  const isDownloading = model.status === 'downloading';
+  const handleClick = () => {
+    if (isDownloaded) { onSelect(); return; }
+    if (isDownloading) return;
+    onDownload(model.id);
+  };
+
+  return (
+    <button
+      className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
+        selected && isDownloaded ? 'bg-blue-500/15' : 'hover:bg-white/5'
+      }`}
+      onClick={handleClick}
+    >
+      <div className="w-4 h-4 shrink-0 flex items-center justify-center">
+        {selected && isDownloaded ? (
+          <CheckCircle2 className="w-4 h-4 text-blue-400" />
+        ) : isDownloading ? (
+          <Loader2 className="w-3.5 h-3.5 text-white/40 animate-spin" />
+        ) : isDownloaded ? (
+          <div className="w-2.5 h-2.5 rounded-full border border-white/20" />
+        ) : (
+          <Download className="w-3.5 h-3.5 text-white/25" />
+        )}
+      </div>
+      <span className={`text-sm flex-1 ${
+        selected && isDownloaded ? 'text-white font-semibold' :
+        isDownloaded ? 'text-white/70' : 'text-white/50'
+      }`}>
+        {model.name}
+      </span>
+      {isDownloading && model.progress !== undefined && model.progress > 0 ? (
+        <span className="text-[10px] font-mono text-white/30">{model.progress}%</span>
+      ) : (
+        <span className="text-[10px] font-mono text-white/25">{model.size}</span>
+      )}
+    </button>
+  );
+};
+
+const ModelSelector: React.FC<{
+  models: AIModel[];
+  selectedId: string;
+  ramGb: number;
+  onSelect: (id: string) => void;
+  onDownload: (id: string) => void;
+  onDelete: (model: AIModel) => void;
+}> = ({ models, selectedId, ramGb, onSelect, onDownload, onDelete }) => {
+  const [open, setOpen] = useState(false);
+
+  const recommended = models.filter((m) => m.recommended);
+  const others = models.filter((m) => !m.recommended);
+  const selected = models.find((m) => m.id === selectedId);
+
+  // Close on outside click
+  const ref = React.useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className="flex items-center gap-2 h-9 px-4 bg-white/5 border border-white/10 rounded-xl text-sm hover:border-white/25 transition-all min-w-52"
+      >
+        <span className="text-white/80 font-medium flex-1 text-left truncate">{selected?.name ?? 'Select model'}</span>
+        <span className="text-white/25 font-mono text-[11px] shrink-0">{selected?.size}</span>
+        <ChevronDown className={`w-3.5 h-3.5 text-white/30 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1 z-50 w-72 bg-[#181818] border border-white/10 rounded-2xl shadow-2xl overflow-hidden py-1">
+          {recommended.length > 0 && (
+            <>
+              <p className="px-4 py-1.5 text-[10px] font-bold text-white/25 uppercase tracking-widest">Recommended</p>
+              {recommended.map((m) => (
+                <ModelOption key={m.id} model={m} selected={m.id === selectedId}
+                  onSelect={() => { onSelect(m.id); setOpen(false); }} onDownload={onDownload} />
+              ))}
+            </>
+          )}
+          {others.length > 0 && (
+            <>
+              <div className="border-t border-white/5 mt-1" />
+              <p className="px-4 py-1.5 text-[10px] font-bold text-white/25 uppercase tracking-widest">Other Models</p>
+              {others.map((m) => (
+                <ModelOption key={m.id} model={m} selected={m.id === selectedId}
+                  onSelect={() => { onSelect(m.id); setOpen(false); }} onDownload={onDownload} />
+              ))}
+            </>
+          )}
+          {/* Delete downloaded model (non-bundled) */}
+          {selected && selected.status === 'downloaded' && selected.id !== 'gemma2-2b' && (
+            <>
+              <div className="border-t border-white/5 mt-1" />
+              <button
+                onClick={() => { onDelete(selected); setOpen(false); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-red-500/10 text-red-400/60 hover:text-red-400 transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span className="text-sm">Delete {selected.name}</span>
+              </button>
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
-  settings, onSettingsChange, models, onDownloadModel, onDeleteModel, activeSection, ramGb = 8,
+  settings, onSettingsChange, models, onDownloadModel, onDeleteModel, activeSection, ramGb = 8, onEngineStarted,
 }) => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteModelTarget, setDeleteModelTarget] = useState<AIModel | null>(null);
@@ -82,12 +207,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [stats, setStats] = useState<AllStats | null>(null);
   const [blocklistInput, setBlocklistInput] = useState('');
   const [blocklist, setBlocklist] = useState<BlocklistEntry[]>(settings.blocklist ?? []);
+  const [engineRunning, setEngineRunning] = useState<boolean | null>(null);
+  const [engineStarting, setEngineStarting] = useState(false);
 
   useEffect(() => {
     if (activeSection === 'stats') {
       getAllStats().then(setStats).catch(() => {});
     }
   }, [activeSection]);
+
+  // Check welk model geladen is (in-process engine, geen server nodig)
+  useEffect(() => {
+    if (!isDesktop) { setEngineRunning(true); return; }
+    const check = async () => {
+      const model = await invoke<string | null>('llm_get_loaded_model').catch(() => null);
+      setEngineRunning(model !== null);
+    };
+    check();
+    const iv = setInterval(check, 3000);
+    return () => clearInterval(iv);
+  }, []);
+
+  const startEngine = async () => {
+    // Niet van toepassing bij in-process inference — engine start automatisch met de app
+  };
 
   const downloadedModels = models.filter((m) => m.status === 'downloaded');
   const availableModels = models.filter((m) => m.status !== 'downloaded');
@@ -136,7 +279,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Wipe memory confirm modal */}
       <AnimatePresence>
         {showDeleteConfirm && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xl">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -174,7 +317,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       {/* Delete model confirm modal */}
       <AnimatePresence>
         {deleteModelTarget && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xl">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/90">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
@@ -273,89 +416,121 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* ── MODELS ──────────────────────────────────────────────────── */}
         {(activeSection === 'models' || activeSection === 'settings') && (
           <div className="space-y-6">
-            {downloadedModels.length > 0 && (
-              <div className="glass-card p-8">
-                <h3 className="text-xs font-black text-white/20 uppercase tracking-[0.3em] mb-6">Active Model</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {downloadedModels.map((m) => (
-                    <div key={m.id} className={`relative group rounded-xl border transition-all ${settings.modelId === m.id ? 'bg-white/10 border-white/30 ring-1 ring-white/20' : 'bg-white/3 border-white/5 hover:border-white/15'}`}>
-                      <button onClick={() => onSettingsChange({ modelId: m.id })} className="text-left p-4 w-full">
-                        <div className="flex items-center justify-between mb-1">
-                          <div className="flex items-center gap-2">
-                            <span className="text-sm font-bold text-white">{m.name}</span>
-                            {m.recommended && (
-                              <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />
-                            )}
-                          </div>
-                          {settings.modelId === m.id && <CheckCircle2 className="w-4 h-4 text-white/60" />}
-                        </div>
-                        <span className="text-xs text-white/30">{m.size}</span>
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setDeleteModelTarget(m); }}
-                        title="Delete model"
-                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 w-7 h-7 rounded-lg bg-red-500/10 hover:bg-red-500/25 flex items-center justify-center text-red-400/70 hover:text-red-400 transition-all"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
+            {/* AI Settings — Cotypist-style model picker */}
             <div className="glass-card p-8">
-              <div className="flex items-center justify-between mb-6">
-                <h3 className="text-xs font-black text-white/20 uppercase tracking-[0.3em]">Model Library</h3>
-                <span className="text-[10px] text-white/20 font-mono">System RAM: {ramLabel}</span>
-              </div>
-              <div className="space-y-2">
-                {availableModels.map((m) => {
-                  const tooHeavy = m.minRamGb !== undefined && m.minRamGb > ramGb + 2;
-                  return (
-                    <div key={m.id} className={`flex items-center justify-between p-4 rounded-xl border transition-all ${
-                      m.recommended
-                        ? 'bg-white/4 border-white/10'
-                        : 'bg-white/2 border-white/5'
-                    }`}>
-                      <div className="flex items-center gap-4">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${m.status === 'downloading' ? 'bg-white/10' : 'bg-white/5'}`}>
-                          {m.status === 'downloading'
-                            ? <Loader2 className="w-5 h-5 text-white/60 animate-spin" />
-                            : <HardDrive className="w-5 h-5 text-white/30" />
-                          }
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <p className="text-sm font-bold text-white/80">{m.name}</p>
-                            {m.recommended && <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />}
-                            {tooHeavy && <AlertCircle className="w-3 h-3 text-orange-400/60" />}
-                          </div>
-                          <p className="text-xs text-white/30">{m.description}</p>
-                          {tooHeavy && (
-                            <p className="text-[10px] text-orange-400/50 mt-0.5">Requires at least {m.minRamGb} GB RAM</p>
-                          )}
-                          {m.status === 'downloading' && (
-                            <div className="mt-2 w-48 h-1 bg-white/10 rounded-full overflow-hidden">
-                              <motion.div className="h-full bg-white/50 rounded-full" style={{ width: `${m.progress ?? 0}%` }} />
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-xs font-mono text-white/25">{m.size}</span>
-                        {m.status === 'available' ? (
-                          <button onClick={() => onDownloadModel(m.id)}
-                            className="h-8 px-4 text-[10px] font-bold uppercase tracking-wider bg-white/5 border border-white/10 rounded-lg text-white/50 hover:text-white hover:border-white/30 transition-all flex items-center gap-1.5">
-                            <Download className="w-3 h-3" /> Download
-                          </button>
-                        ) : (
-                          <span className="text-xs font-mono text-white/40">{Math.round(m.progress ?? 0)}%</span>
-                        )}
-                      </div>
+              <h3 className="text-xs font-black text-white/20 uppercase tracking-[0.3em] mb-6">AI Settings</h3>
+
+              {/* Model status (in-process — geen server nodig) */}
+              <Row
+                label="Model Status"
+                desc={engineRunning
+                  ? 'Model is geladen en klaar voor gebruik.'
+                  : 'Geen model geladen. Download een model hieronder.'}
+              >
+                {engineRunning === null ? (
+                  <Loader2 className="w-3.5 h-3.5 text-white/30 animate-spin" />
+                ) : engineRunning ? (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-green-400" />
+                    <span className="text-xs text-white/50">Ready</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-white/20" />
+                    <span className="text-xs text-white/30">No model</span>
+                  </div>
+                )}
+              </Row>
+
+              <Row label="AI Model" desc="Select the model used for completions.">
+                <ModelSelector
+                  models={models}
+                  selectedId={settings.modelId}
+                  ramGb={ramGb}
+                  onSelect={(id) => onSettingsChange({ modelId: id })}
+                  onDownload={onDownloadModel}
+                  onDelete={(m) => setDeleteModelTarget(m)}
+                />
+              </Row>
+
+              {/* Recommended indicator */}
+              {(() => {
+                const rec = models.find((m) => m.recommended && m.id !== settings.modelId);
+                const cur = models.find((m) => m.id === settings.modelId);
+                if (cur?.recommended) return (
+                  <div className="flex items-center gap-1.5 mt-1 ml-0.5">
+                    <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />
+                    <p className="text-xs text-white/40">Recommended for your system: <span className="text-white/60">{cur.name}</span></p>
+                  </div>
+                );
+                if (rec) return (
+                  <div className="flex items-center gap-1.5 mt-1 ml-0.5">
+                    <Star className="w-3 h-3 text-yellow-400 fill-yellow-400" />
+                    <p className="text-xs text-white/40">Recommended for your system: <span className="text-white/60">{rec.name}</span></p>
+                  </div>
+                );
+                return null;
+              })()}
+
+              {/* Download error messages */}
+              {models.filter((m) => m.status === 'available' && m.downloadStatus).map((m) => {
+                const isAuthError = m.downloadStatus?.includes('401') || m.downloadStatus?.includes('Unauthorized');
+                return (
+                  <div key={m.id} className="mt-3 p-3 rounded-xl bg-red-950/40 border border-red-800/30">
+                    <p className="text-[11px] font-bold text-red-400 mb-1">{m.name} — download mislukt</p>
+                    {isAuthError ? (
+                      <p className="text-[10px] text-red-400/70 leading-relaxed">
+                        Dit model vereist een HuggingFace token. Maak een gratis account op{' '}
+                        <button
+                          onClick={() => window.open('https://huggingface.co/settings/tokens', '_blank')}
+                          className="underline hover:text-red-300"
+                        >
+                          huggingface.co
+                        </button>
+                        , accepteer de Gemma-licentie, en plak je token in het "HuggingFace Token" veld hierboven.
+                      </p>
+                    ) : (
+                      <p className="text-[10px] text-red-400/60 font-mono break-all">{m.downloadStatus}</p>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* Downloading model progress bar (shown outside dropdown) */}
+              {models.filter((m) => m.status === 'downloading').map((m) => (
+                <div key={m.id} className="mt-4 p-4 rounded-xl bg-white/3 border border-white/5">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-3.5 h-3.5 text-white/40 animate-spin" />
+                      <span className="text-xs font-semibold text-white/60">{m.name}</span>
                     </div>
-                  );
-                })}
+                    <span className="text-xs font-mono text-white/30">{m.progress ?? 0}%</span>
+                  </div>
+                  <div className="w-full h-1 bg-white/10 rounded-full overflow-hidden">
+                    <motion.div
+                      className="h-full bg-white/40 rounded-full"
+                      animate={{ width: `${m.progress ?? 0}%` }}
+                      transition={{ duration: 0.4, ease: 'linear' }}
+                    />
+                  </div>
+                  {m.totalBytes && m.totalBytes > 0 && m.downloadedBytes !== undefined && (
+                    <p className="text-[10px] text-white/20 font-mono mt-1.5">
+                      {(m.downloadedBytes / 1e9).toFixed(2)} / {(m.totalBytes / 1e9).toFixed(2)} GB
+                    </p>
+                  )}
+                </div>
+              ))}
+
+              <div className="border-t border-white/5 mt-5 pt-5">
+                <Row label="Model Files" desc="Open the folder containing downloaded models.">
+                  <button
+                    onClick={() => invoke('reveal_models_folder')}
+                    className="flex items-center gap-2 h-9 px-4 border border-white/10 rounded-xl text-xs font-bold text-white/50 hover:text-white/80 hover:border-white/25 transition-all"
+                  >
+                    <FolderOpen className="w-3.5 h-3.5" />
+                    Reveal in Finder
+                  </button>
+                </Row>
               </div>
             </div>
 

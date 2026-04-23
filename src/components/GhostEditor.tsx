@@ -1,10 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { getCompletion } from '../services/aiService';
 import { recordSuggestion } from '../services/statsService';
-import { readClipboard } from '../services/clipboardService';
+import { readClipboard, writeClipboard } from '../services/clipboardService';
 import { AppSettings } from '../types';
-import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Clipboard, Copy } from 'lucide-react';
+import { Copy } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
@@ -26,6 +25,7 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
   const [lastAccepted, setLastAccepted] = useState('');
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
+  const generationRef = useRef(0);
 
   const triggerSuggestion = useCallback(
     async (text: string) => {
@@ -34,9 +34,9 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
         return;
       }
 
+      const gen = ++generationRef.current;
       setIsGenerating(true);
 
-      // Gather context
       const clipboardCtx = settings.clipboardEnabled ? await readClipboard() : '';
 
       const historyCtx = isDesktop
@@ -51,6 +51,8 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
         historyContext: historyCtx,
       });
 
+      if (generationRef.current !== gen) return;
+
       setIsGenerating(false);
       if (result) setSuggestion(result);
     },
@@ -61,12 +63,10 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
     if (e.key === 'Tab' && suggestion) {
       e.preventDefault();
 
-      // Find the boundary between the first word and the rest of the suggestion.
       const leadingSpace = suggestion.startsWith(' ') ? 1 : 0;
       const splitIdx = suggestion.indexOf(' ', leadingSpace + 1);
 
       if (splitIdx === -1) {
-        // Last (or only) word — accept everything, then immediately ask for the next suggestion
         const newContent = content + suggestion;
         setContent(newContent);
         setSuggestion('');
@@ -84,17 +84,13 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
             .catch(console.error);
         }
 
-        // Immediately think ahead — no debounce after Tab
         triggerSuggestion(newContent);
       } else {
-        // Accept first word, keep the rest, AND immediately re-generate based on new content
         const firstWord = suggestion.slice(0, splitIdx);
-        const rest = suggestion.slice(splitIdx); // starts with ' '
+        const rest = suggestion.slice(splitIdx);
         const newContent = content + firstWord;
         setContent(newContent);
         setSuggestion(rest);
-
-        // Proactively generate a fresh follow-up suggestion in the background
         triggerSuggestion(newContent);
       }
     } else if (e.key === 'Escape') {
@@ -113,7 +109,6 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
     timeoutRef.current = setTimeout(() => triggerSuggestion(newText), settings.triggerDelayMs);
   };
 
-  // Sync content to editor div without losing cursor
   useEffect(() => {
     if (editorRef.current && editorRef.current.innerText !== content) {
       editorRef.current.innerText = content;
@@ -128,7 +123,6 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
 
   const handleCopyAccepted = async () => {
     if (lastAccepted) {
-      const { writeClipboard } = await import('../services/clipboardService');
       await writeClipboard(lastAccepted);
     }
   };
@@ -137,27 +131,20 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
     <div className="w-full relative" id="ghost-editor">
 
       {/* Editor */}
-      <div className="relative min-h-[160px] bg-white/[0.02] border border-white/5 rounded-2xl p-6 overflow-hidden hover:border-white/10 transition-all duration-300 focus-within:border-white/15">
-        {/* Generating indicator */}
-        <AnimatePresence>
-          {isGenerating && (
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute top-4 right-4 flex items-center gap-1.5"
-            >
-              {[0, 1, 2].map((i) => (
-                <motion.div
-                  key={i}
-                  animate={{ opacity: [0.2, 1, 0.2], y: [0, -4, 0] }}
-                  transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
-                  className="w-1 h-1 rounded-full bg-white/40"
-                />
-              ))}
-            </motion.div>
-          )}
-        </AnimatePresence>
+      <div className="relative min-h-[160px] bg-white/[0.02] border border-white/5 rounded-2xl p-6 overflow-hidden hover:border-white/10 transition-colors duration-150 focus-within:border-white/15">
+
+        {/* Generating indicator — CSS animation, no JS rAF */}
+        {isGenerating && (
+          <div className="absolute top-4 right-4 flex items-center gap-1.5">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="w-1 h-1 rounded-full bg-white/40 ghost-dot"
+                style={{ animationDelay: `${i * 0.15}s` }}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Contenteditable input */}
         <div
@@ -171,28 +158,17 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
           data-placeholder="Start typing to see AI-powered suggestions..."
         />
 
-        {/* Ghost suggestion overlay */}
+        {/* Ghost suggestion overlay — CSS fade, no JS rAF */}
         <div className="absolute top-6 left-6 right-6 pointer-events-none whitespace-pre-wrap text-lg font-sans leading-relaxed">
-          <AnimatePresence>
-            {suggestion && !isGenerating && (
-              <motion.span
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="text-transparent select-none"
-              >
-                <span className="invisible">{content}</span>
-                <span className="text-white/20 italic">
-                  {suggestion}
-                  <motion.span
-                    animate={{ opacity: [1, 0, 1] }}
-                    transition={{ duration: 0.9, repeat: Infinity }}
-                    className="inline-block w-[2px] h-[1.1em] bg-white/30 ml-0.5 align-text-bottom rounded-sm"
-                  />
-                </span>
-              </motion.span>
-            )}
-          </AnimatePresence>
+          {suggestion && !isGenerating && (
+            <span className="text-transparent select-none">
+              <span className="invisible">{content}</span>
+              <span className="text-white/20 italic ghost-suggestion-in">
+                {suggestion}
+                <span className="ghost-cursor" />
+              </span>
+            </span>
+          )}
         </div>
 
         {/* Empty placeholder */}
@@ -208,17 +184,14 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
         <div className="text-[10px] text-white/15 font-mono">
           {content.length > 0 && `${content.split(/\s+/).filter(Boolean).length} words`}
         </div>
-        {lastAccepted && (
-          <motion.button
-            initial={{ opacity: 0, x: 10 }}
-            animate={{ opacity: 1, x: 0 }}
-            onClick={handleCopyAccepted}
-            className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-white/30 hover:text-white/70 transition-colors"
-          >
-            <Copy className="w-3 h-3" />
-            Copy accepted
-          </motion.button>
-        )}
+        <button
+          onClick={handleCopyAccepted}
+          className={`flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-white/30 hover:text-white/70 transition-colors duration-100 ${lastAccepted ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+          style={{ transition: 'opacity 200ms, color 100ms' }}
+        >
+          <Copy className="w-3 h-3" />
+          Copy accepted
+        </button>
       </div>
 
       <style dangerouslySetInnerHTML={{ __html: `

@@ -2,12 +2,12 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   CheckCircle2, Circle, Loader2, ChevronRight, Download, ShieldCheck,
-  Monitor, Clipboard, Cpu, AlertTriangle, RefreshCw, Zap, Eye
+  Monitor, Clipboard, AlertTriangle, RefreshCw, Zap
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { SetupStatus } from '../types';
-import { OLLAMA_TEXT_MODEL, OLLAMA_VISION_MODEL } from '../constants';
+import { MODELS, getDefaultModelId } from '../constants';
 
 const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
 
@@ -44,7 +44,7 @@ const StatusBadge: React.FC<{ status: StepStatus; badge?: string; progress?: num
         <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-white/10">
           <Loader2 className="w-3 h-3 animate-spin text-white/60" />
           <span className="text-[11px] font-bold text-white/60 uppercase tracking-wider">
-            {progress !== undefined && progress > 0 ? 'Downloading' : 'Installing'}
+            {progress !== undefined ? (progress > 0 ? 'Downloading' : 'Connecting') : 'Waiting'}
           </span>
         </div>
       </div>
@@ -91,7 +91,7 @@ const ProgressBar: React.FC<{ progress?: number }> = ({ progress }) => (
         className="h-full bg-white/40 rounded-full"
         initial={{ width: 0 }}
         animate={{ width: `${progress}%` }}
-        transition={{ ease: 'linear' }}
+        transition={{ duration: 0.4, ease: 'linear' }}
       />
     ) : (
       <motion.div
@@ -157,16 +157,13 @@ const SetupRow: React.FC<{
 
 export const SetupWizard: React.FC<SetupWizardProps> = ({ ollamaUrl, onComplete }) => {
   const [steps, setSteps] = useState<Step[]>([
-    { id: 'ollama_engine', title: 'AI Engine', description: 'Ingebouwde AI engine — klaar.', status: 'done', badge: 'Bundled' },
-    { id: 'default_model', title: 'AI Model', description: 'Gemma 2 2B is meegeleverd in de app — geen download nodig.', status: 'done', badge: 'Bundled' },
-    { id: 'vision_model', title: 'Vision Model (optional)', description: `Downloads ${OLLAMA_VISION_MODEL} (1.7 GB) for screen-aware suggestions. Can be skipped.`, status: 'pending', progress: 0, skippable: true },
+    { id: 'default_model', title: 'AI Model', description: 'Detecting best model for your system...', status: 'pending', progress: 0 },
     { id: 'accessibility', title: 'Accessibility Permission', description: 'Required so OpenSuggest can show suggestions in all apps on your system (Chrome, Google, Word, etc.).', status: 'pending' },
     { id: 'screen_recording', title: 'Screen Recording (optional)', description: 'Recommended for context-aware suggestions. OpenSuggest analyzes your screen locally — nothing is sent anywhere.', status: 'pending', skippable: true },
     { id: 'clipboard', title: 'Clipboard Context (optional)', description: 'Allow OpenSuggest to read your clipboard for more relevant completions. Content is never stored.', status: 'pending', skippable: true },
   ]);
 
   const [allDone, setAllDone] = useState(false);
-  const [currentStep, setCurrentStep] = useState(0);
   const [clipboardEnabled, setClipboardEnabled] = useState(false);
   const [permissionPolling, setPermissionPolling] = useState<string | null>(null);
 
@@ -178,32 +175,79 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ ollamaUrl, onComplete 
 
   const runSetup = useCallback(async () => {
     if (!isDesktop) {
-      // Browser demo mode — mark everything done
       setSteps((prev) => prev.map((s) => ({ ...s, status: 'done', badge: s.id === 'clipboard' ? 'Enabled' : 'Granted' })));
       setAllDone(true);
       return;
     }
 
-    // Engine + model zijn gebundeld en starten automatisch — sla over, ga direct naar permissions
+    // ── Step 0: AI Model — detect RAM, pick best model, download via GGUF ─
+    const ramGb = await invoke<number>('get_system_ram_gb').catch(() => 8);
+    const bestModelId = getDefaultModelId(ramGb);
+    const bestModel = MODELS.find((m) => m.id === bestModelId);
 
-    // ── Step 2: Vision Model — auto-skip ─────────────────────────────────
+    if (!bestModel?.ggufUrl || !bestModel.ggufFilename) {
+      updateStep('default_model', { status: 'error', description: 'No suitable model found for your system.' });
+      return;
+    }
 
-    setCurrentStep(2);
-    updateStep('vision_model', { status: 'skipped', badge: 'Skipped' });
+    updateStep('default_model', {
+      status: 'running',
+      description: `${bestModel.name} (${bestModel.size}) — best fit for ${ramGb} GB RAM.`,
+    });
 
-    // ── Step 3: Accessibility Permission ──────────────────────────────────
+    // Check if already downloaded locally
+    const localModels = await invoke<{ filename: string }[]>('llm_list_local_models').catch(() => []);
+    const alreadyDownloaded = localModels.some((m) => m.filename === bestModel.ggufFilename);
 
-    setCurrentStep(3);
+    if (alreadyDownloaded) {
+      await invoke('llm_load_model', { filename: bestModel.ggufFilename }).catch(() => {});
+      updateStep('default_model', { status: 'done', badge: 'Ready' });
+    } else {
+      const unlisten = await listen<{ filename: string; progress: number; status: string }>(
+        'gguf-download-progress',
+        (e) => {
+          if (e.payload.filename === bestModel.ggufFilename) {
+            if (e.payload.status === 'error') {
+              updateStep('default_model', { status: 'error' });
+            } else {
+              updateStep('default_model', { progress: e.payload.progress });
+            }
+          }
+        }
+      );
+
+      try {
+        await invoke('llm_download_gguf', {
+          url: bestModel.ggufUrl,
+          filename: bestModel.ggufFilename,
+          hfToken: '',
+        });
+      } catch (e) {
+        unlisten();
+        updateStep('default_model', {
+          status: 'error',
+          description: `Download mislukt: ${String(e).slice(0, 80)}`,
+        });
+        return;
+      }
+      unlisten();
+
+      // Load the model — if this fails the file is still on disk and will load on next launch
+      try {
+        await invoke('llm_load_model', { filename: bestModel.ggufFilename });
+      } catch {
+        // ignore — file is downloaded, model loads on restart
+      }
+      updateStep('default_model', { status: 'done', badge: 'Downloaded' });
+    }
+
+    // ── Step 2: Accessibility Permission ──────────────────────────────────
+    const checkA11y = async (): Promise<boolean> => invoke<boolean>('check_accessibility_permission');
     updateStep('accessibility', { status: 'running' });
-
-    const checkA11y = async (): Promise<boolean> => {
-      return invoke<boolean>('check_accessibility_permission');
-    };
 
     if (!(await checkA11y())) {
       await invoke('request_accessibility_permission');
       setPermissionPolling('accessibility');
-      // Poll until granted (max 60s)
       let granted = false;
       for (let i = 0; i < 60; i++) {
         await new Promise((r) => setTimeout(r, 1000));
@@ -214,20 +258,15 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ ollamaUrl, onComplete 
         updateStep('accessibility', { status: 'done', badge: 'Granted' });
       } else {
         updateStep('accessibility', { status: 'error' });
-        return; // Required — can't continue
+        return;
       }
     } else {
       updateStep('accessibility', { status: 'done', badge: 'Granted' });
     }
 
-    // ── Step 4: Screen Recording (skippable) ──────────────────────────────
-
-    setCurrentStep(4);
+    // ── Step 3: Screen Recording (skippable) ──────────────────────────────
+    const checkScreen = async (): Promise<boolean> => invoke<boolean>('check_screen_recording_permission');
     updateStep('screen_recording', { status: 'running' });
-
-    const checkScreen = async (): Promise<boolean> => {
-      return invoke<boolean>('check_screen_recording_permission');
-    };
 
     if (!(await checkScreen())) {
       await invoke('request_screen_recording_permission');
@@ -238,24 +277,15 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ ollamaUrl, onComplete 
         if (await checkScreen()) { granted = true; break; }
       }
       setPermissionPolling(null);
-      updateStep('screen_recording', {
-        status: granted ? 'done' : 'skipped',
-        badge: granted ? 'Granted' : 'Skipped',
-      });
+      updateStep('screen_recording', { status: granted ? 'done' : 'skipped', badge: granted ? 'Granted' : 'Skipped' });
     } else {
       updateStep('screen_recording', { status: 'done', badge: 'Granted' });
     }
 
-    // ── Step 5: Clipboard (user choice) ──────────────────────────────────
-
-    setCurrentStep(5);
-    updateStep('clipboard', {
-      status: 'done',
-      badge: clipboardEnabled ? 'Enabled' : 'Disabled',
-    });
+    // ── Step 4: Clipboard ────────────────────────────────────────────────
+    updateStep('clipboard', { status: 'done', badge: clipboardEnabled ? 'Enabled' : 'Disabled' });
 
     setAllDone(true);
-    setCurrentStep(-1);
   }, [ollamaUrl, clipboardEnabled, updateStep]);
 
   useEffect(() => {
@@ -267,18 +297,14 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ ollamaUrl, onComplete 
     .every((s) => s.status === 'done');
 
   const stepIcons: Record<string, React.ElementType> = {
-    ollama_engine: Cpu,
     default_model: Download,
-    vision_model: Eye,
     accessibility: ShieldCheck,
     screen_recording: Monitor,
     clipboard: Clipboard,
   };
 
   const stepBadgeOverrides: Record<string, string> = {
-    ollama_engine: 'Running',
     default_model: 'Downloaded',
-    vision_model: 'Skipped',
     accessibility: 'Granted',
     screen_recording: 'Granted',
     clipboard: clipboardEnabled ? 'Enabled' : 'Disabled',
