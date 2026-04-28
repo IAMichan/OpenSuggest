@@ -1,8 +1,9 @@
 import React from 'react';
-import { Zap, ArrowRight, ShieldCheck, Cpu, Terminal, Download, Command, Lock, Sparkles, Keyboard, Settings2, Apple, Monitor } from 'lucide-react';
+import { Zap, ArrowRight, Terminal, Command, Sparkles, Keyboard, ShieldCheck, Cpu, Monitor } from 'lucide-react';
 import { motion } from 'motion/react';
 import { DOWNLOAD_LINKS } from '../constants';
 import { AppleLogo, WindowsLogo } from './BrandLogos';
+import { AppIcon } from './AppIcon';
 import { AppSettings } from '../types';
 
 // Linux SVG logo
@@ -112,113 +113,199 @@ export const WelcomePage: React.FC<{
   settings?: AppSettings;
   onSettingsChange?: (s: Partial<AppSettings>) => void;
 }> = ({ onStart, settings, onSettingsChange }) => {
-  const features = [
-    { icon: Command, title: 'GLOBAL HOOK', desc: 'Deep OS accessibility integration — suggestions appear in every app.' },
-    { icon: Cpu, title: 'RUST KERNEL', desc: 'Sub-10ms inference cycles powered by memory-safe Rust and local silicon.' },
-    { icon: Lock, title: 'SOVEREIGN DATA', desc: 'Training, inference and feedback happen entirely in your local RAM.' },
+  const highlights = [
+    { icon: Sparkles, title: 'Less rewriting', desc: 'OpenSuggest catches repetitive phrasing and proposes cleaner continuations.' },
+    { icon: Command, title: 'Less context switching', desc: 'Suggestions follow your active app, so you stay in the same writing loop.' },
+    { icon: ShieldCheck, title: 'More private flow', desc: 'Everything runs locally with your own model and local context layers.' },
   ];
 
-  const steps = [
-    { step: '01', icon: Settings2, title: 'SELECT MODEL', desc: 'Choose from Gemma, Mistral, Llama, Phi and more.' },
-    { step: '02', icon: Keyboard, title: 'TYPE FREELY', desc: 'Write in Slack, Mail, VS Code, or any other app.' },
-    { step: '03', icon: Sparkles, title: 'GHOST FEED', desc: 'Contextual predictions appear as ghost text at your cursor.' },
-    { step: '04', icon: Zap, title: 'TAB SYNC', desc: 'Instantly accept with TAB. Native, fast, effortless.' },
+  const testimonialCards = [
+    { quote: "I write faster and the suggestions feel surprisingly natural.", author: "Nina Verhoeven", role: "Product Designer" },
+    { quote: "Finally a writing assistant that feels native across apps.", author: "Lucas van Wijk", role: "Founder" },
+    { quote: "The local-first setup was exactly what we needed for privacy.", author: "Emma de Vries", role: "Engineering Lead" },
+    { quote: "TAB accept is so smooth it disappears into muscle memory.", author: "Sam Rood", role: "Indie Developer" },
+  ];
+
+  const flowFeatures = [
+    { icon: Sparkles, title: 'Heads-up suggestions', desc: 'See ghost text early so completions never feel abrupt.' },
+    { icon: Keyboard, title: 'One key accept', desc: 'Accept instantly with TAB and keep momentum while writing.' },
+    { icon: Command, title: 'System-wide context', desc: 'Suggestions adapt to the app and task you are currently in.' },
+  ];
+
+  const pauseContexts = [
+    { icon: Monitor, label: 'Slack' },
+    { icon: Cpu, label: 'VS Code' },
+    { icon: Keyboard, label: 'Gmail' },
+    { icon: Sparkles, label: 'Notion' },
+    { icon: Command, label: 'Browser forms' },
+  ];
+
+  const customization = [
+    { title: 'Model and tone control', desc: 'Choose your local model and tune completion style for every writing mode.' },
+    { title: 'Local intelligence layers', desc: 'Blend screen context, clipboard context and history in one private pipeline.' },
+    { title: 'Native desktop feel', desc: 'Fast startup, system-level integration and a UI that stays out of your way.' },
+  ];
+
+  const updates = [
+    { title: 'OpenSuggest 1.1', desc: 'Faster cold starts, better local model detection and smoother overlay behavior.' },
+    { title: 'OpenSuggest 1.0', desc: 'Global ghost text, cross-app suggestions and local-first setup launched.' },
+    { title: 'Next up', desc: 'More presets, richer usage insights and deeper per-app controls.' },
   ];
 
   return (
-    <div className="min-h-full bg-black text-white overflow-hidden" id="welcome-page">
-      {/* Background glow */}
-      <div className="fixed top-0 left-1/2 -translate-x-1/2 w-full h-[500px] bg-gradient-to-b from-white/4 to-transparent pointer-events-none" />
+    <div className="min-h-full bg-[#07070a] text-white overflow-hidden" id="welcome-page">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_22%_36%,rgba(255,255,255,0.10),transparent_34%),radial-gradient(circle_at_74%_28%,rgba(118,255,207,0.14),transparent_40%),radial-gradient(circle_at_56%_70%,rgba(130,170,220,0.12),transparent_36%),linear-gradient(to_bottom,rgba(5,5,7,0.72),rgba(5,5,7,1))]" />
 
-      <div className="relative z-10 max-w-7xl mx-auto px-6 md:px-8 pt-20 pb-32">
-        {/* Nav */}
-        <nav className="flex items-center justify-between mb-24 md:mb-32">
-          <div className="flex items-center gap-2">
-            <Zap className="w-5 h-5 fill-white" />
-            <span className="text-sm font-black uppercase tracking-[0.3em]">OpenSuggest</span>
-          </div>
-          <div className="hidden md:flex items-center gap-10 text-[10px] font-bold uppercase tracking-widest text-white/30">
-            <a href="#features" className="hover:text-white transition-colors">Technology</a>
-            <a href="#demo" className="hover:text-white transition-colors">Demo</a>
-            <a href="#download" className="hover:text-white transition-colors">Download</a>
-          </div>
-          <button onClick={() => onStart('download')}
-            className="px-5 py-2 bg-white text-black text-[10px] font-black uppercase tracking-widest rounded-full hover:scale-105 transition-transform">
-            Get the App
-          </button>
-        </nav>
-
-        {/* Hero */}
-        <div className="max-w-5xl mb-40 md:mb-60">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-            className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 text-[10px] font-black text-white/70 uppercase tracking-[0.3em] mb-10">
-            <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-            v1.0.0 — Zero Cloud, Zero Telemetry
-          </motion.div>
-          <motion.h1 initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.8 }}
-            className="text-6xl sm:text-8xl md:text-[10rem] font-display font-black tracking-[-0.07em] leading-[0.82] mb-12 uppercase">
-            RADICAL <br />
-            <span className="text-white/10">PRIVACY.</span>
-          </motion.h1>
-          <motion.p initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-            className="text-xl md:text-2xl text-white/35 font-display font-bold leading-tight max-w-2xl mb-14 tracking-tight">
-            No cloud. No telemetry. Your keystrokes never leave your machine. OpenSuggest runs local LLMs on your hardware.
-          </motion.p>
-          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="flex flex-wrap gap-4">
-            <button onClick={() => onStart('download')}
-              className="h-16 px-10 bg-white text-black font-display font-black uppercase tracking-[0.2em] text-sm rounded-2xl flex items-center gap-4 hover:scale-[1.02] transition-all shadow-2xl active:scale-[0.98]">
-              Get Local Access <ArrowRight className="w-5 h-5" />
-            </button>
-            {settings && (
-              <button onClick={() => onStart('demo')}
-                className="h-16 px-10 bg-white/5 border border-white/10 text-white font-display font-black uppercase tracking-[0.2em] text-sm rounded-2xl hover:bg-white/8 transition-all flex items-center gap-4">
-                Try Playground <Terminal className="w-5 h-5 opacity-30" />
-              </button>
-            )}
-          </motion.div>
-        </div>
-
-        {/* Feature Grid */}
-        <div id="features" className="grid grid-cols-1 md:grid-cols-3 gap-px bg-white/8 border border-white/8 rounded-[32px] overflow-hidden mb-32 md:mb-40">
-          {features.map((f, i) => (
-            <div key={i} className="bg-black p-12 hover:bg-white/[0.025] transition-all duration-500 group">
-              <div className="w-14 h-14 rounded-2xl bg-white/5 flex items-center justify-center mb-8 group-hover:bg-white group-hover:text-black transition-all duration-500 ring-1 ring-white/8">
-                <f.icon className="w-6 h-6" />
+      <div className="relative z-10 max-w-6xl mx-auto px-5 md:px-8 pt-5 md:pt-8 pb-18 md:pb-24">
+        <section className="mb-12 md:mb-16">
+          <div className="flex justify-center mb-10">
+            <nav className="h-14 px-6 rounded-full border border-white/12 bg-white/[0.04] backdrop-blur-md inline-flex items-center gap-7 text-sm">
+              <div className="flex items-center gap-2 font-semibold">
+                <AppIcon size={20} variant="full" />
+                OpenSuggest
               </div>
-              <h3 className="text-xl font-display font-black mb-4 tracking-tight uppercase">{f.title}</h3>
-              <p className="text-sm text-white/30 leading-relaxed">{f.desc}</p>
-            </div>
-          ))}
-        </div>
+              <a href="#welcome-page" className="text-white font-semibold">Home</a>
+              <a href="#updates" className="text-white/70 hover:text-white transition-colors hidden md:block">Updates</a>
+              <a href="#features" className="text-white/70 hover:text-white transition-colors hidden md:block">Features</a>
+              <button onClick={() => onStart('download')} className="inline-flex items-center gap-2 text-white/90 hover:text-white transition-colors font-semibold">
+                <AppleLogo className="w-4 h-4" />
+                Download
+              </button>
+            </nav>
+          </div>
 
-        {/* Steps */}
-        <div className="mb-32 md:mb-40 text-center">
-          <h2 className="text-5xl md:text-7xl font-display font-black tracking-tighter mb-16 uppercase">
-            FOUR STEPS TO <span className="text-white/10">SOVEREIGNTY</span>
+          <div className="text-center flex flex-col items-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-white/15 bg-white/[0.05] text-[13px] text-white/90 mb-8">
+              <span className="px-2 py-0.5 rounded-full bg-[linear-gradient(to_right,#2b2f35,#4c6b62)] text-white text-[11px] font-semibold">OpenSuggest 1.0</span>
+              Local writing, inside and out
+              <ArrowRight className="w-3.5 h-3.5 opacity-70" />
+            </div>
+
+            <div className="mb-8 drop-shadow-[0_20px_60px_rgba(100,40,200,0.45)]">
+              <AppIcon size={112} variant="full" />
+            </div>
+
+            <h1 className="text-[2.45rem] md:text-[4.4rem] leading-[0.98] font-display font-black max-w-4xl mb-6">
+              The desktop app
+              <br />
+              your writing workflow thanks you for
+            </h1>
+            <p className="text-[1.15rem] md:text-[2rem] leading-[1.38] text-white/88 max-w-3xl mb-10">
+              Smart completions, local context, and private-by-default ghost text that quietly helps you write better while you work.
+            </p>
+
+            <button
+              onClick={() => onStart('download')}
+              className="h-13 px-8 rounded-full bg-white text-black font-black text-[1.08rem] inline-flex items-center gap-3 hover:scale-[1.02] transition-transform"
+            >
+              <AppleLogo className="w-5 h-5" />
+              Download for Desktop
+            </button>
+            <p className="mt-4 text-sm text-white/50 font-mono">v1.0.0 • macOS 12+ • Windows 10/11 • Linux</p>
+          </div>
+        </section>
+
+        <div className="h-[240px] md:h-[330px] rounded-[36px] bg-[linear-gradient(to_bottom,#c5d2de,#aebecf)] border border-white/20 shadow-[0_30px_120px_rgba(120,136,160,0.28)] overflow-hidden mb-[-96px] md:mb-[-120px] relative z-20">
+          <div className="absolute left-1/2 -translate-x-1/2 bottom-5 w-[82%] h-12 rounded-2xl bg-black/70 border border-white/15" />
+        </div>
+      </div>
+
+      <div className="relative z-10 bg-[radial-gradient(circle_at_82%_0%,rgba(118,255,207,0.12),transparent_34%),radial-gradient(circle_at_20%_10%,rgba(130,170,220,0.08),transparent_28%),#07070a] text-white pt-32 md:pt-40 pb-10">
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-24 -translate-y-full bg-[linear-gradient(to_bottom,rgba(7,7,10,0),#07070a_85%)]" />
+        <div className="max-w-6xl mx-auto px-5 md:px-8">
+
+        <section className="mb-16 md:mb-20">
+          <h2 className="text-4xl md:text-5xl font-display font-black leading-[1.02] mb-7">
+            Faster writing. Less doubt.
+            <br />
+            More flow in every app.
           </h2>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-10 px-4">
-            {steps.map((s, i) => (
-              <div key={i} className="text-left group">
-                <div className="text-7xl font-display font-black text-white/[0.03] mb-6">{s.step}</div>
-                <div className="flex items-center gap-3 mb-4">
-                  <div className="w-10 h-10 bg-white/5 rounded-xl flex items-center justify-center ring-1 ring-white/8">
-                    <s.icon className="w-5 h-5 text-white/70" />
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {highlights.map((item) => (
+              <article key={item.title} className="rounded-xl border border-white/10 bg-white/[0.04] backdrop-blur-sm p-6 min-h-[190px]">
+                <item.icon className="w-5 h-5 mb-3 text-white/75" />
+                <h3 className="text-lg font-display font-black mb-2">{item.title}</h3>
+                <p className="text-white/68 text-sm leading-relaxed">{item.desc}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="mb-20 md:mb-24">
+          <h2 className="text-3xl md:text-5xl font-display font-black mb-7">Loved by focused builders</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {testimonialCards.map((item) => (
+              <article key={item.quote} className="rounded-xl border border-white/10 bg-white/[0.03] p-6">
+                <p className="text-lg text-white mb-4 leading-relaxed">"{item.quote}"</p>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-full bg-[linear-gradient(to_bottom_right,#334249,#6ba895)] border border-white/12 flex items-center justify-center text-[11px] font-black text-white/85">
+                    {item.author.split(' ').map((part) => part[0]).join('')}
                   </div>
-                  <h4 className="font-display font-black text-base tracking-tight uppercase">{s.title}</h4>
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.12em] text-white/76">{item.author}</p>
+                    <p className="text-xs text-white/48">{item.role}</p>
+                  </div>
                 </div>
-                <p className="text-sm text-white/30 leading-relaxed">{s.desc}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section id="flow" className="mb-20 md:mb-24">
+          <h2 className="text-4xl md:text-6xl font-display font-black leading-tight mb-4">
+            Suggestions that do not break your flow
+          </h2>
+          <p className="text-white/72 max-w-3xl mb-8 text-lg">
+            OpenSuggest waits for the right moment, gives a subtle heads-up and lets you decide instantly whether to accept, skip or continue typing.
+          </p>
+
+          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 md:p-8 mb-6">
+            <div className="grid grid-cols-1 lg:grid-cols-[1.08fr_0.92fr] gap-6 items-center">
+              <div>
+                <div className="rounded-xl border border-[#121212]/12 bg-[#101111] p-5">
+                  <p className="text-[11px] uppercase tracking-[0.12em] text-white/45 mb-3">Context live</p>
+                  <p className="text-2xl font-display font-black mb-2 text-white">Suggestion ready for your current sentence</p>
+                  <p className="text-white/55 mb-4">OpenSuggest reads local context and proposes the next phrase without breaking your typing rhythm.</p>
+                  <div className="flex flex-wrap gap-2 mb-4">
+                    <button className="px-4 py-2 rounded-lg bg-white text-[#121212] text-xs font-black uppercase tracking-[0.1em]">Accept</button>
+                    <button className="px-4 py-2 rounded-lg bg-white/8 border border-white/15 text-white text-xs font-black uppercase tracking-[0.1em]">Skip</button>
+                    <button className="px-4 py-2 rounded-lg bg-white/8 border border-white/15 text-white text-xs font-black uppercase tracking-[0.1em]">Rewrite</button>
+                  </div>
+                  <div className="h-[150px] rounded-lg border border-white/10 bg-[linear-gradient(to_bottom,rgba(255,255,255,0.07),rgba(255,255,255,0.02))] p-4 flex items-end">
+                    <p className="text-sm text-white/65">Ghost text appears exactly at your cursor in the app you are using.</p>
+                  </div>
+                </div>
+              </div>
+              <div className="space-y-3">
+                {flowFeatures.map((f) => (
+                  <article key={f.title} className="rounded-xl border border-white/10 bg-white/[0.04] p-4 min-h-[104px]">
+                    <div className="flex items-center gap-3 mb-2">
+                      <f.icon className="w-4 h-4 text-white/75" />
+                      <h3 className="font-display font-black text-sm">{f.title}</h3>
+                    </div>
+                    <p className="text-sm text-white/68">{f.desc}</p>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {pauseContexts.map((item) => (
+              <div key={item.label} className="px-3 py-2 rounded-lg border border-white/10 bg-white/[0.03] text-xs uppercase tracking-[0.1em] text-white/65 flex items-center gap-2">
+                <item.icon className="w-3.5 h-3.5" />
+                {item.label}
               </div>
             ))}
           </div>
-        </div>
+        </section>
 
-        {/* Playground */}
-        <div id="demo" className="mb-32 md:mb-40">
+        <section id="demo" className="mb-20 md:mb-24">
           <div className="text-center mb-16">
-            <h2 className="text-4xl md:text-6xl font-display font-black tracking-tighter mb-4 uppercase">
-              SYSTEM <span className="text-white/10">PLAYGROUND</span>
+            <h2 className="text-4xl md:text-6xl font-display font-black mb-4">
+              System Playground
             </h2>
-            <p className="text-white/25 text-xs font-black uppercase tracking-[0.4em]">Interactive Neural Terminal</p>
+            <p className="text-white/55 text-xs font-black uppercase tracking-[0.12em]">Interactive local completion sandbox</p>
           </div>
           <div className="max-w-4xl mx-auto glass-card border-white/8 rounded-[40px] overflow-hidden bg-black">
             <div className="h-12 bg-white/[0.025] border-b border-white/5 flex items-center px-6 gap-3">
@@ -241,19 +328,61 @@ export const WelcomePage: React.FC<{
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Download CTA */}
-        <div id="download" className="glass-card bg-white/[0.015] border-white/5 p-16 md:p-24 rounded-[48px] text-center relative overflow-hidden mb-24">
-          <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-white/5 rounded-full blur-[150px] pointer-events-none translate-x-1/2 -translate-y-1/2" />
-          <h2 className="text-5xl md:text-8xl font-display font-black mb-8 tracking-tighter uppercase leading-[0.85]">
-            EVOLVE YOUR <br /><span className="text-white/10">WORKFLOW</span>
+        <section id="features" className="mb-20 md:mb-24">
+          <h2 className="text-4xl md:text-6xl font-display font-black leading-tight mb-8">
+            Fits your workflow like a glove
           </h2>
-          <p className="text-lg text-white/25 font-display font-bold max-w-xl mx-auto mb-14 tracking-tight">
-            Get the native binary for your operating system. Ollama installs automatically on first launch.
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {customization.map((item) => (
+              <article key={item.title} className="rounded-xl border border-white/10 bg-white/[0.03] p-6">
+                <div className="h-28 rounded-lg border border-white/10 bg-[linear-gradient(to_right,rgba(118,255,207,0.22),rgba(130,170,220,0.16))] mb-4" />
+                <h3 className="font-display font-black text-base mb-2">{item.title}</h3>
+                <p className="text-sm text-white/68 leading-relaxed">{item.desc}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="mb-20 md:mb-24">
+          <div className="rounded-2xl border border-[#121212]/10 bg-[#121212] text-white px-7 md:px-10 py-10 md:py-12">
+            <p className="text-xs uppercase tracking-[0.12em] text-white/45 mb-3">Designed for desktop</p>
+            <h2 className="text-4xl md:text-5xl font-display font-black mb-4">Built for Mac, Windows and Linux</h2>
+            <p className="text-white/65 max-w-2xl mb-7">
+              OpenSuggest is a native desktop app with fast global shortcuts, local model control and smooth overlay performance across your daily tools.
+            </p>
+            <button
+              onClick={() => onStart('download')}
+              className="h-11 px-5 bg-white text-[#121212] rounded-xl text-xs font-black uppercase tracking-[0.12em] inline-flex items-center gap-2"
+            >
+              Download OpenSuggest
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </section>
+
+        <section id="updates" className="mb-20 md:mb-24">
+          <h2 className="text-3xl md:text-5xl font-display font-black mb-7">Recent updates</h2>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {updates.map((update) => (
+              <article key={update.title} className="rounded-xl border border-white/10 bg-white/[0.03] p-6">
+                <p className="text-lg font-display font-black mb-3 text-white">{update.title}</p>
+                <p className="text-white/68 text-sm leading-relaxed">{update.desc}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section id="download" className="glass-card bg-[#121212] border-[#121212]/10 p-10 md:p-14 rounded-3xl text-center relative overflow-hidden mb-18 text-white">
+          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(159,247,208,0.24),transparent_48%)]" />
+          <h2 className="relative text-4xl md:text-6xl font-display font-black mb-6 leading-tight">
+            Download OpenSuggest
+          </h2>
+          <p className="relative text-base text-white/65 max-w-2xl mx-auto mb-10">
+            Install the native app for your platform and run local completions with no cloud dependency by default.
           </p>
-          <div className="flex flex-wrap items-center justify-center gap-3">
-            {/* macOS */}
+          <div className="relative flex flex-wrap items-center justify-center gap-3">
             <a href={DOWNLOAD_LINKS.macos} className="flex items-center gap-3 px-5 py-3.5 bg-white text-black rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all">
               <AppleLogo className="w-5 h-5" />
               <div className="text-left">
@@ -261,7 +390,6 @@ export const WelcomePage: React.FC<{
                 <p className="text-sm font-black tracking-tight">macOS</p>
               </div>
             </a>
-            {/* Windows */}
             <a href={DOWNLOAD_LINKS.windows} className="flex items-center gap-3 px-5 py-3.5 bg-[#0078D4] text-white rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all">
               <WindowsLogo className="w-5 h-5" />
               <div className="text-left">
@@ -269,24 +397,24 @@ export const WelcomePage: React.FC<{
                 <p className="text-sm font-black tracking-tight">Windows</p>
               </div>
             </a>
-            {/* Linux */}
-            <a href={DOWNLOAD_LINKS.linux_appimage} className="flex items-center gap-3 px-5 py-3.5 bg-orange-500/20 border border-orange-500/30 text-white rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all">
-              <LinuxLogo className="w-5 h-5 text-orange-400" />
+            <a href={DOWNLOAD_LINKS.linux_appimage} className="flex items-center gap-3 px-5 py-3.5 bg-[#1f2823] border border-white/10 text-white rounded-xl hover:scale-[1.02] active:scale-[0.98] transition-all">
+              <LinuxLogo className="w-5 h-5 text-[#9ff7d0]" />
               <div className="text-left">
                 <p className="text-[9px] font-black uppercase tracking-widest opacity-60">Download for</p>
                 <p className="text-sm font-black tracking-tight">Linux</p>
               </div>
             </a>
           </div>
-          <p className="text-[10px] text-white/15 mt-8 font-mono uppercase tracking-widest">
+          <p className="relative text-[10px] text-white/35 mt-8 font-mono uppercase tracking-[0.12em]">
             v1.0.0 • macOS 12+ • Windows 10/11 • Ubuntu/Debian/Arch
           </p>
-        </div>
+        </section>
       </div>
 
-      <footer className="py-16 border-t border-white/5 text-center text-[10px] font-bold uppercase tracking-[0.4em] text-white/15">
-        Engineered for total sovereignty • OpenSuggest 2026 • Open Source
+      <footer className="py-12 border-t border-white/8 text-center text-[10px] font-bold uppercase tracking-[0.12em] text-white/45">
+        OpenSuggest 2026 • Local-first writing system
       </footer>
+    </div>
     </div>
   );
 };

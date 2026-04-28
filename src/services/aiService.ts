@@ -68,83 +68,118 @@ export async function deleteModel(modelId: string, ollamaUrl: string): Promise<v
 
 // ─────────────────────────── Prompt Engineering ───────────────────────────────
 
+/** Geeft het prompt-formaat terug op basis van het model-ID. */
+function getPromptTemplate(modelId: string): string {
+  if (modelId.includes('qwen')) return 'qwen_fim';
+  if (modelId.includes('llama')) return 'llama';
+  if (modelId.includes('mistral')) return 'mistral';
+  return 'gemma';
+}
+
+/** FIM-modellen (bijv. Qwen) kunnen mid-word completions aan; instructie-modellen niet. */
+export function modelSupportsFim(modelId: string): boolean {
+  return modelId.includes('qwen');
+}
+
 function buildMessages(
   text: string,
+  modelId: string,
   screenContext: string,
   clipboardContext: string,
   historyContext: string,
-): { system: string; userMessage: string } {
-  // Analyse de huidige tekst zodat het model weet waar het zit
-  const trimmed = text.trimEnd();
-  const lastSentenceMatch = trimmed.match(/[.!?]\s+([^.!?]*)$/);
-  const currentSentence = lastSentenceMatch ? lastSentenceMatch[1] : trimmed;
-  const isMidSentence = currentSentence.length > 0 && !/[.!?]$/.test(trimmed);
-  const endsWithSpace = text.endsWith(' ');
+): { system: string; userMessage: string; promptTemplate: string } {
+  const promptTemplate = getPromptTemplate(modelId);
+
+  // FIM-modellen (Qwen) hebben geen systeem-prompt nodig — de FIM-tokens doen het werk.
+  if (promptTemplate === 'qwen_fim') {
+    const tail = text.length > 500 ? text.slice(-500) : text;
+    return { system: '', userMessage: tail, promptTemplate };
+  }
 
   const contextParts: string[] = [];
-  if (screenContext)    contextParts.push(`Screen context: ${screenContext}`);
+  if (screenContext)    contextParts.push(`Screen: ${screenContext}`);
   if (clipboardContext) contextParts.push(`Clipboard: ${clipboardContext}`);
-  if (historyContext)   contextParts.push(`Writing style: ${historyContext.slice(0, 120)}`);
+  if (historyContext)   contextParts.push(`Style: ${historyContext.slice(0, 200)}`);
 
-  const task = isMidSentence
-    ? 'The user is mid-sentence. Output only the words that complete the current sentence.'
-    : 'The user finished a sentence. Write the next sentence only.';
+  const system = `You are an autocomplete engine. Continue the given text naturally in the same language.
+Output ONLY the next 3-5 words. No explanations, no greetings, no preamble.
+The input always ends at a word boundary. Match the tone and style.${contextParts.length ? '\n' + contextParts.join(' | ') : ''}`;
 
-  const system = [
-    'You are a text autocomplete engine. ' + task,
-    'Critical: output ONLY the raw continuation text. No preamble, no labels, no markdown.',
-    'Match the exact language (Dutch/English/etc) and writing style of the input. Maximum 25 words.',
-    ...(contextParts.length ? [contextParts.join(' | ')] : []),
-  ].join('\n');
+  const tail = text.length > 400 ? text.slice(-400) : text;
+  const userMessage = `Continue: ${tail}`;
 
-  // Last 500 chars — gives enough semantic context without overloading the prompt
-  const contextWindow = text.length > 500 ? '…' + text.slice(-500) : text;
-  // Send the text as-is; the model naturally continues from the end
-  const userMessage = contextWindow;
+  return { system, userMessage, promptTemplate };
+}
 
-  return { system, userMessage };
+// ─────────────────────────── Result Cache ─────────────────────────────────────
+
+const completionCache = new Map<string, string>();
+
+function cacheKey(text: string): string {
+  return text.slice(-300);
+}
+
+function getCached(text: string): string | undefined {
+  return completionCache.get(cacheKey(text));
+}
+
+function setCached(text: string, result: string) {
+  const key = cacheKey(text);
+  completionCache.set(key, result);
+  if (completionCache.size > 30) {
+    completionCache.delete(completionCache.keys().next().value!);
+  }
 }
 
 // ─────────────────────────── Smart Spacing ────────────────────────────────────
 
-export function smartPrefix(existingText: string, suggestion: string): string {
+/**
+ * Verwerkt een ruwe model-suggestie naar een display-klare aanvulling.
+ * @param isFim  true voor FIM-modellen (Qwen): het model geeft de exacte suffix terug,
+ *               dus GEEN automatische spatie toevoegen — dat zou "Maken" in "Ma ken" veranderen.
+ *               false voor instructie-modellen: spatie wel toevoegen bij nieuwe woorden.
+ */
+export function smartPrefix(existingText: string, suggestion: string, isFim = false): string {
   if (!suggestion) return suggestion;
 
+  // Strip markdown formatting en model-artifacts
+  let processed = suggestion
+    .replace(/\*\*/g, '')
+    .replace(/\[COMPLETE FROM HERE\]/gi, '');
+
+  if (!processed) return '';
+
   // Verwijder overlappende tekst (bijv. als de AI de input herhaalt)
-  const maxOverlap = Math.min(existingText.length, suggestion.length, 150);
+  const maxOverlap = Math.min(existingText.length, processed.length, 150);
   const existingLower = existingText.toLowerCase();
-  const suggestionLower = suggestion.toLowerCase();
+  const processedLower = processed.toLowerCase();
 
   let overlapLength = 0;
   for (let i = maxOverlap; i > 0; i--) {
-    if (existingLower.slice(-i) === suggestionLower.slice(0, i)) {
+    if (existingLower.slice(-i) === processedLower.slice(0, i)) {
       overlapLength = i;
       break;
     }
   }
 
-  let processedSuggestion = suggestion;
   if (overlapLength > 0) {
-    processedSuggestion = suggestion.slice(overlapLength);
+    processed = processed.slice(overlapLength);
   }
 
-  // Strip [COMPLETE FROM HERE] als het model dit in de output meeneemt
-  processedSuggestion = processedSuggestion.replace(/\[COMPLETE FROM HERE\]/gi, '').trim();
+  if (!processed) return '';
 
-  const trimmed = processedSuggestion.trimStart();
-  if (!trimmed) return '';
+  // Voorkom dubbele spaties
+  if (existingText.endsWith(' ') && processed.startsWith(' ')) {
+    processed = processed.trimStart();
+  }
 
-  // Geen spatie voor leestekens
-  const startsWithPunctuation = /^[,\.!\?;:\-…)]/.test(trimmed);
-  if (startsWithPunctuation) return trimmed;
+  // Instructie-modellen retourneren een nieuw woord zonder leading space → voeg die toe.
+  // FIM-modellen geven de exacte suffix terug ("ken" voor "Ma") → geen spatie nodig.
+  if (!isFim && overlapLength === 0 && /\w$/.test(existingText) && /^\w/.test(processed)) {
+    processed = ' ' + processed;
+  }
 
-  // Bestaande tekst eindigt al met whitespace
-  if (/[\s\n\t]$/.test(existingText)) return trimmed;
-
-  // Na openend haakje/aanhalingsteken geen spatie
-  if (/[([{"'«]$/.test(existingText)) return trimmed;
-
-  return ' ' + trimmed;
+  return processed;
 }
 
 // ─────────────────────────── Browser Fallback ─────────────────────────────────
@@ -183,38 +218,51 @@ export async function getCompletion(
 ): Promise<string> {
   if (!text.trim()) return '';
 
+  const cached = getCached(text);
+  if (cached !== undefined) return cached;
+
   if (isDesktop) {
     const model = MODELS.find((m) => m.id === modelId) || VISION_MODELS.find((m) => m.id === modelId);
     const ollamaModelId = model?.ollamaId ?? modelId;
 
-    const { system, userMessage } = buildMessages(
+    const { system, userMessage, promptTemplate } = buildMessages(
       text,
+      modelId,
       options.screenContext ?? '',
       options.clipboardContext ?? '',
       options.historyContext ?? ''
     );
 
     try {
-      // Probeer eerst in-process llama.cpp (geen server nodig)
       const raw = await invoke<string>('llm_complete', {
         systemPrompt: system,
         userText: userMessage,
-        maxTokens: 40,
+        maxTokens: 8,
+        promptTemplate,
       });
-      if (raw) return smartPrefix(text, raw);
+      if (raw) {
+        const result = smartPrefix(text, raw, modelSupportsFim(modelId));
+        setCached(text, result);
+        return result;
+      }
     } catch {
-      // Fallback naar Ollama als llm_complete niet beschikbaar is
+      // Fallback naar Ollama
     }
 
     try {
+      const isFimModel = modelSupportsFim(modelId);
       const raw = await invoke<string>('ollama_chat', {
         userMessage,
         modelId: ollamaModelId,
         ollamaUrl,
-        systemPrompt: system,
+        // FIM-modellen via Ollama krijgen een lege systemPrompt —
+        // de userMessage bevat al het FIM-formaat via de prompt template
+        systemPrompt: isFimModel ? '' : system,
         images: options.images ?? [],
       });
-      return smartPrefix(text, raw);
+      const result = smartPrefix(text, raw, isFimModel);
+      setCached(text, result);
+      return result;
     } catch (e) {
       console.error('AI fout:', e);
       return '';
@@ -222,6 +270,89 @@ export async function getCompletion(
   }
 
   return getBrowserFallback(text);
+}
+
+/**
+ * Streaming versie van getCompletion voor de in-process LLM.
+ * Roept `onToken` aan voor elk gegenereerd token, `onDone` wanneer klaar.
+ * Geeft een cancel-functie terug.
+ * Valt terug op `getCompletion` (batch) als streaming niet beschikbaar is.
+ */
+export async function streamCompletion(
+  text: string,
+  modelId: string,
+  ollamaUrl: string,
+  requestId: number,
+  options: {
+    screenContext?: string;
+    clipboardContext?: string;
+    historyContext?: string;
+  },
+  onToken: (token: string) => void,
+  onDone: (fullText: string) => void,
+): Promise<() => void> {
+  if (!text.trim()) { onDone(''); return () => {}; }
+
+  const cached = getCached(text);
+  if (cached !== undefined) {
+    // Simuleer streaming uit cache: toon direct als één stuk
+    setTimeout(() => { onToken(cached); onDone(cached); }, 0);
+    return () => {};
+  }
+
+  if (!isDesktop) {
+    const result = getBrowserFallback(text);
+    setTimeout(() => { if (result) onToken(result); onDone(result); }, 0);
+    return () => {};
+  }
+
+  const { system, userMessage, promptTemplate } = buildMessages(
+    text, modelId,
+    options.screenContext ?? '',
+    options.clipboardContext ?? '',
+    options.historyContext ?? ''
+  );
+  const isFim = modelSupportsFim(modelId);
+
+  let cancelled = false;
+  let unlisten: (() => void) | null = null;
+  let accumulated = '';
+
+  try {
+    const { listen } = await import('@tauri-apps/api/event');
+    unlisten = await listen<{ id: number; token: string; done: boolean }>('llm-token', (event) => {
+      if (cancelled || event.payload.id !== requestId) return;
+      if (event.payload.done) {
+        const processed = smartPrefix(text, accumulated, isFim);
+        setCached(text, processed);
+        onDone(processed);
+        return;
+      }
+      accumulated += event.payload.token;
+      const processed = smartPrefix(text, accumulated, isFim);
+      if (processed) onToken(processed);
+    });
+
+    await invoke('llm_complete_stream', {
+      systemPrompt: system,
+      userText: userMessage,
+      maxTokens: 8,
+      promptTemplate,
+      requestId,
+    });
+  } catch {
+    unlisten?.();
+    if (!cancelled) {
+      // Fallback naar batch-modus (Ollama of andere fout)
+      const result = await getCompletion(text, modelId, ollamaUrl, options);
+      if (!cancelled) { onToken(result); onDone(result); }
+    }
+  }
+
+  return () => {
+    cancelled = true;
+    unlisten?.();
+  };
 }
 
 // ─────────────────────────── System Info ──────────────────────────────────────

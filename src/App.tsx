@@ -520,19 +520,19 @@ function MainApp() {
           <div className="flex-1 overflow-hidden relative">
             <AnimatePresence>
               {activeTab === 'web' && (
-                <motion.div key="web" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full overflow-y-auto absolute inset-0">
+                <motion.div key="web" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} style={{ contain: 'layout style paint' }} className="h-full overflow-y-auto absolute inset-0">
                   <WelcomePage onStart={handleTabChange} settings={settings} onSettingsChange={handleSettingsChange} />
                 </motion.div>
               )}
               {activeTab === 'demo' && (
-                <motion.div key="demo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full overflow-y-auto p-10 max-w-4xl mx-auto absolute inset-0">
+                <motion.div key="demo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} style={{ contain: 'layout style paint' }} className="h-full overflow-y-auto p-10 max-w-4xl mx-auto absolute inset-0">
                   <h2 className="text-3xl font-display font-black text-white uppercase tracking-tight mb-3">Playground</h2>
                   <p className="text-sm text-white/30 mb-10">Type below and watch the AI complete your sentences in real time.</p>
                   <GhostEditor settings={settings} onSettingsChange={handleSettingsChange} screenContext={screenContext} />
                 </motion.div>
               )}
               {settingsTabs.includes(activeTab) && (
-                <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full absolute inset-0">
+                <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} style={{ contain: 'layout style paint' }} className="h-full absolute inset-0">
                   <SettingsView
                     settings={settings}
                     onSettingsChange={handleSettingsChange}

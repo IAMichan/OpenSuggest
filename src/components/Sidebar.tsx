@@ -4,6 +4,7 @@ import {
   Clock, Layout, Keyboard, BarChart2
 } from 'lucide-react';
 import { APP_VERSION } from '../constants';
+import { AppIcon } from './AppIcon';
 
 const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.userAgent);
@@ -36,9 +37,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isEnab
         {/* Logo */}
         <div className="mb-10 pointer-events-none" data-tauri-drag-region>
           <div className="flex items-center gap-3 mb-2" data-tauri-drag-region>
-            <div className="w-9 h-9 rounded-xl bg-white shadow-[0_0_20px_rgba(255,255,255,0.12)] flex items-center justify-center flex-shrink-0">
-              <Zap className="w-5 h-5 text-black fill-black" />
-            </div>
+            <AppIcon size={36} variant="full" className="shrink-0 shadow-[0_0_20px_rgba(120,60,220,0.35)]" />
             <h1 className="text-lg font-display font-black tracking-tighter text-white uppercase">
               OpenSuggest
             </h1>
@@ -68,7 +67,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange, isEnab
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-colors duration-100 group ${
                 isActive
                   ? 'bg-white text-black'
-                  : 'text-white/30 hover:text-white/70 hover:bg-white/[0.04]'
+                  : 'text-white/30 hover:text-white/70 hover:bg-white/4'
               }`}
             >
               <item.icon

@@ -275,7 +275,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="h-full overflow-y-auto px-10 py-12 max-w-4xl mx-auto" id="settings-view">
+    <div className="h-full overflow-y-auto px-10 py-12 max-w-4xl mx-auto" id="settings-view" style={{ contain: 'layout style' }}>
       {/* Wipe memory confirm modal */}
       <AnimatePresence>
         {showDeleteConfirm && (

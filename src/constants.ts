@@ -130,7 +130,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ollamaUrl: 'http://127.0.0.1:11435',
   contextLength: 200,
   isEnabled: true,
-  triggerDelayMs: 100,
+  triggerDelayMs: 30,
   minCharsForSuggestion: 3,
   maxSuggestionLength: 80,
   // Theme

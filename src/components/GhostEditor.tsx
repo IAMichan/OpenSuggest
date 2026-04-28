@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { getCompletion } from '../services/aiService';
+import { streamCompletion, smartPrefix, modelSupportsFim } from '../services/aiService';
 import { recordSuggestion } from '../services/statsService';
 import { readClipboard, writeClipboard } from '../services/clipboardService';
 import { AppSettings } from '../types';
@@ -7,6 +7,27 @@ import { Copy } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 
 const isDesktop = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__;
+
+// Context cache — buiten de component zodat hij de sessie overleeft.
+// Clipboard en history worden maximaal eens per 5 seconden opgehaald.
+const ctxCache = { clipboard: '', history: '', ts: 0 };
+
+async function loadContext(settings: AppSettings): Promise<{ clipboard: string; history: string }> {
+  const now = Date.now();
+  if (now - ctxCache.ts < 5000) return ctxCache;
+
+  const [clipboard, history] = await Promise.all([
+    settings.clipboardEnabled ? readClipboard().catch(() => '') : Promise.resolve(''),
+    isDesktop
+      ? invoke<string[]>('db_get_history', { limit: 5 })
+          .then((items) => items.join('. '))
+          .catch(() => '')
+      : Promise.resolve(''),
+  ]);
+
+  Object.assign(ctxCache, { clipboard, history, ts: now });
+  return ctxCache;
+}
 
 interface GhostEditorProps {
   settings: AppSettings;
@@ -26,6 +47,8 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
   const generationRef = useRef(0);
+  // Houdt de cancel-functie van de lopende stream bij
+  const cancelStreamRef = useRef<(() => void) | null>(null);
 
   const triggerSuggestion = useCallback(
     async (text: string) => {
@@ -34,27 +57,56 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
         return;
       }
 
+      // Instructie-modellen (Gemma, Llama, Mistral) kunnen geen mid-word completions aan.
+      // Alleen triggeren als de tekst eindigt op een woordgrens (spatie of leesteken).
+      // FIM-modellen (Qwen) kunnen wel bij elke letter worden getriggerd.
+      if (!modelSupportsFim(settings.modelId) && /\S$/.test(text) && !/[.!?,;:\s]$/.test(text)) {
+        // Verouderde suggestie wissen — die was voor een andere woordgrens gegenereerd.
+        setSuggestion('');
+        setIsGenerating(false);
+        return;
+      }
+
+      // Annuleer eventuele vorige stream
+      cancelStreamRef.current?.();
+      cancelStreamRef.current = null;
+
       const gen = ++generationRef.current;
       setIsGenerating(true);
 
-      const clipboardCtx = settings.clipboardEnabled ? await readClipboard() : '';
-
-      const historyCtx = isDesktop
-        ? await invoke<string[]>('db_get_history', { limit: 10 })
-            .then((items) => items.slice(0, 5).join('. '))
-            .catch(() => '')
-        : '';
-
-      const result = await getCompletion(text, settings.modelId, settings.ollamaUrl, {
-        screenContext: settings.screenContextEnabled ? screenContext : '',
-        clipboardContext: clipboardCtx,
-        historyContext: historyCtx,
-      });
+      // Context parallel laden (gecached, dus vrijwel gratis bij opeenvolgende aanroepen)
+      const { clipboard: clipboardCtx, history: historyCtx } = await loadContext(settings);
 
       if (generationRef.current !== gen) return;
 
-      setIsGenerating(false);
-      if (result) setSuggestion(result);
+      const cancel = await streamCompletion(
+        text,
+        settings.modelId,
+        settings.ollamaUrl,
+        gen,
+        {
+          screenContext: settings.screenContextEnabled ? screenContext : '',
+          clipboardContext: clipboardCtx,
+          historyContext: historyCtx,
+        },
+        // onToken — wordt aangeroepen voor elk binnenkomend token
+        (partialSuggestion) => {
+          if (generationRef.current !== gen) return;
+          if (partialSuggestion) setSuggestion(partialSuggestion);
+        },
+        // onDone — wordt aangeroepen als de stream klaar is
+        (finalSuggestion) => {
+          if (generationRef.current !== gen) return;
+          setIsGenerating(false);
+          if (finalSuggestion) setSuggestion(finalSuggestion);
+        },
+      );
+
+      if (generationRef.current === gen) {
+        cancelStreamRef.current = cancel;
+      } else {
+        cancel();
+      }
     },
     [settings, screenContext]
   );
@@ -94,7 +146,10 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
         triggerSuggestion(newContent);
       }
     } else if (e.key === 'Escape') {
+      cancelStreamRef.current?.();
+      cancelStreamRef.current = null;
       setSuggestion('');
+      setIsGenerating(false);
       if (suggestion) recordSuggestion(false, 0);
     }
   };
@@ -102,8 +157,10 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
   const handleInput = (e: React.FormEvent<HTMLDivElement>) => {
     const newText = e.currentTarget.innerText;
     setContent(newText);
-    setSuggestion('');
-    setIsGenerating(false);
+
+    // Stop de huidige inferentie direct — geen verspilde GPU-cycles op verouderde tekst.
+    cancelStreamRef.current?.();
+    cancelStreamRef.current = null;
 
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => triggerSuggestion(newText), settings.triggerDelayMs);
@@ -131,9 +188,9 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
     <div className="w-full relative" id="ghost-editor">
 
       {/* Editor */}
-      <div className="relative min-h-[160px] bg-white/[0.02] border border-white/5 rounded-2xl p-6 overflow-hidden hover:border-white/10 transition-colors duration-150 focus-within:border-white/15">
+      <div className="relative min-h-40 bg-white/2 border border-white/5 rounded-2xl p-6 overflow-hidden hover:border-white/10 transition-colors duration-150 focus-within:border-white/15">
 
-        {/* Generating indicator — CSS animation, no JS rAF */}
+        {/* Generating indicator */}
         {isGenerating && (
           <div className="absolute top-4 right-4 flex items-center gap-1.5">
             {[0, 1, 2].map((i) => (
@@ -153,17 +210,20 @@ export const GhostEditor: React.FC<GhostEditorProps> = ({
           suppressContentEditableWarning
           onInput={handleInput}
           onKeyDown={handleKeyDown}
-          className="relative z-10 w-full min-h-[120px] outline-none text-lg text-white whitespace-pre-wrap break-words font-sans leading-relaxed caret-white selection:bg-white/15"
+          className="relative z-10 w-full min-h-30 outline-none text-lg text-white whitespace-pre-wrap wrap-break-word font-sans leading-relaxed caret-white selection:bg-white/15"
           spellCheck={false}
           data-placeholder="Start typing to see AI-powered suggestions..."
         />
 
-        {/* Ghost suggestion overlay — CSS fade, no JS rAF */}
+        {/* Ghost suggestion overlay */}
         <div className="absolute top-6 left-6 right-6 pointer-events-none whitespace-pre-wrap text-lg font-sans leading-relaxed">
-          {suggestion && !isGenerating && (
+          {suggestion && (
             <span className="text-transparent select-none">
               <span className="invisible">{content}</span>
-              <span className="text-white/20 italic ghost-suggestion-in">
+              <span
+                className="italic ghost-suggestion-in"
+                style={{ color: isGenerating ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.20)' }}
+              >
                 {suggestion}
                 <span className="ghost-cursor" />
               </span>

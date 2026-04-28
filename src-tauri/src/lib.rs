@@ -14,6 +14,7 @@ use llama_cpp_2::{
     llama_batch::LlamaBatch,
     model::{params::LlamaModelParams, AddBos, LlamaModel},
     sampling::LlamaSampler,
+    token::LlamaToken,
 };
 #[allow(deprecated)]
 use llama_cpp_2::model::Special;
@@ -34,6 +35,12 @@ enum LlmMsg {
         max_tokens: usize,
         reply: oneshot::Sender<Result<String, String>>,
     },
+    CompleteStream {
+        prompt: String,
+        max_tokens: usize,
+        token_tx: std::sync::mpsc::Sender<Option<String>>,
+        reply: oneshot::Sender<Result<(), String>>,
+    },
 }
 
 /// Start een dedicated inference thread die het model in geheugen houdt.
@@ -45,25 +52,31 @@ fn spawn_llm_thread() -> mpsc::SyncSender<LlmMsg> {
     std::thread::Builder::new()
         .name("llm-inference".into())
         .spawn(move || {
-            let backend = match LlamaBackend::init() {
+            let mut backend = match LlamaBackend::init() {
                 Ok(b) => b,
                 Err(e) => { eprintln!("LLM: backend init mislukt: {e}"); return; }
             };
+            backend.void_logs();
 
-            let n_ctx_val = 512u32;
+            let n_ctx_val = 2048u32;
             let cpu_threads = std::thread::available_parallelism()
                 .map(|n| n.get() as i32).unwrap_or(4).min(8);
 
+            // KV-cache prefix tracking: slaat de tokens van de vorige prompt op zodat
+            // we de gemeenschappelijke prefix kunnen hergebruiken in plaats van alles opnieuw te verwerken.
+            let mut prev_prompt_tokens: Vec<LlamaToken> = Vec::new();
+            let mut prev_n_prompt: usize = 0;
+
             // SAFETY: `cached_ctx` wordt ALTIJD gedropped vóór `loaded` wordt aangepast.
-            // We verlengen de lifetime handmatig; de pointer blijft geldig zolang `loaded`
-            // het model bevat en wij de invariant handhaven.
             let mut loaded: Option<Box<LlamaModel>> = None;
             let mut cached_ctx: Option<LlamaContext<'static>> = None;
 
             while let Ok(msg) = rx.recv() {
                 match msg {
                     LlmMsg::Load { path, reply } => {
-                        drop(cached_ctx.take()); // ctx EERST droppen, dan model
+                        drop(cached_ctx.take());
+                        prev_prompt_tokens.clear();
+                        prev_n_prompt = 0;
 
                         let params = LlamaModelParams::default()
                             .with_n_gpu_layers(1_000_000);
@@ -77,8 +90,6 @@ fn spawn_llm_thread() -> mpsc::SyncSender<LlmMsg> {
                         match result {
                             Ok(model) => {
                                 loaded = Some(Box::new(model));
-                                // SAFETY: Box<LlamaModel> leeft op de heap — stabiel adres.
-                                // cached_ctx wordt altijd gedropped vóór loaded wordt gewijzigd.
                                 let model_ref: &'static LlamaModel = unsafe {
                                     &*(&**loaded.as_ref().unwrap() as *const LlamaModel)
                                 };
@@ -87,7 +98,6 @@ fn spawn_llm_thread() -> mpsc::SyncSender<LlmMsg> {
                                     .with_n_threads(cpu_threads)
                                     .with_n_threads_batch(cpu_threads);
                                 if let Ok(ctx) = model_ref.new_context(&backend, ctx_params) {
-                                    // SAFETY: zie bovenstaande invariant
                                     cached_ctx = Some(unsafe {
                                         std::mem::transmute::<LlamaContext<'_>, LlamaContext<'static>>(ctx)
                                     });
@@ -101,16 +111,32 @@ fn spawn_llm_thread() -> mpsc::SyncSender<LlmMsg> {
                     LlmMsg::Complete { prompt, max_tokens, reply } => {
                         let result = match (&loaded, &mut cached_ctx) {
                             (Some(model), Some(ctx)) => {
-                                llm_run_reuse(model, ctx, n_ctx_val as usize, &prompt, max_tokens)
+                                let mut out = String::new();
+                                llm_run(model, ctx, n_ctx_val as usize, &prompt, max_tokens,
+                                        &mut prev_prompt_tokens, &mut prev_n_prompt,
+                                        |piece| { out.push_str(&piece); })
+                                    .map(|_| out.trim().to_string())
                             }
                             _ => Err("Geen model geladen".to_string()),
                         };
                         let _ = reply.send(result);
                     }
+
+                    LlmMsg::CompleteStream { prompt, max_tokens, token_tx, reply } => {
+                        let result = match (&loaded, &mut cached_ctx) {
+                            (Some(model), Some(ctx)) => {
+                                llm_run(model, ctx, n_ctx_val as usize, &prompt, max_tokens,
+                                        &mut prev_prompt_tokens, &mut prev_n_prompt,
+                                        |piece| { let _ = token_tx.send(Some(piece)); })
+                            }
+                            _ => Err("Geen model geladen".to_string()),
+                        };
+                        let _ = token_tx.send(None);
+                        let _ = reply.send(result.map(|_| ()));
+                    }
                 }
             }
 
-            // Juiste drop-volgorde bij thread exit
             drop(cached_ctx);
             drop(loaded);
         })
@@ -119,15 +145,20 @@ fn spawn_llm_thread() -> mpsc::SyncSender<LlmMsg> {
     tx
 }
 
-/// Voert één completion uit met een hergebruikte context (geen heralloc van Metal buffers).
-/// Elke aanroep start vanaf positie 0 zodat de KV-cache impliciet wordt overschreven.
+/// Voert één completion uit met incrementele KV-cache hergebruik.
+/// Als de nieuwe prompt een prefix deelt met de vorige prompt, worden alleen de nieuwe
+/// tokens verwerkt — dit elimineert vrijwel alle promptverwerkingstijd bij opeenvolgend typen.
+/// De `on_token` callback wordt per gegenereerd token aangeroepen voor streaming.
 #[allow(deprecated)]
-fn llm_run_reuse(
+fn llm_run<F: FnMut(String)>(
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,
     n_ctx: usize,
     prompt: &str,
     max_tokens: usize,
+    prev_tokens: &mut Vec<LlamaToken>,
+    prev_n_prompt: &mut usize,
+    mut on_token: F,
 ) -> Result<String, String> {
     let tokens = model.str_to_token(prompt, AddBos::Always).map_err(|e| e.to_string())?;
     if tokens.is_empty() { return Ok(String::new()); }
@@ -135,19 +166,53 @@ fn llm_run_reuse(
     let n_prompt = tokens.len();
     if n_prompt >= n_ctx { return Err("Prompt te lang".to_string()); }
 
-    // Wis de KV-cache zodat de nieuwe sequentie vanaf positie 0 kan starten
-    ctx.clear_kv_cache();
+    // Bepaal de lengte van het gemeenschappelijke prefix met de vorige prompt.
+    // Minimaal 8 tokens — kleinere overlap is niet de moeite waard.
+    let common_len = prev_tokens.iter()
+        .zip(tokens.iter())
+        .take_while(|(a, b)| a == b)
+        .count()
+        .min(*prev_n_prompt);
 
     let mut batch = LlamaBatch::new(n_ctx, 1);
 
-    // Verwerk alle prompt-tokens in één batch (één forward pass)
-    for (i, &tok) in tokens.iter().enumerate() {
-        batch.add(tok, i as i32, &[0], i == n_prompt - 1).map_err(|e| e.to_string())?;
+    if common_len >= 8 {
+        // Incrementeel: verwijder alles ná het gemeenschappelijke prefix uit de KV-cache
+        // en verwerk alleen de nieuwe tokens. Dit is de grote snelheidswinst.
+        let _ = ctx.clear_kv_cache_seq(Some(0), Some(common_len as u32), None);
+        let new_tokens = &tokens[common_len..];
+        for (i, &tok) in new_tokens.iter().enumerate() {
+            let pos = (common_len + i) as i32;
+            batch.add(tok, pos, &[0], i == new_tokens.len() - 1).map_err(|e| e.to_string())?;
+        }
+    } else {
+        // Volledig opnieuw verwerken
+        ctx.clear_kv_cache();
+        for (i, &tok) in tokens.iter().enumerate() {
+            batch.add(tok, i as i32, &[0], i == n_prompt - 1).map_err(|e| e.to_string())?;
+        }
     }
+
     ctx.decode(&mut batch).map_err(|e| e.to_string())?;
 
+    // Bewaar de huidige prompt-tokens voor de volgende aanroep
+    *prev_tokens = tokens.clone();
+    *prev_n_prompt = n_prompt;
+
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(42_u32);
+    let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::penalties(64, 1.2, 0.1, 0.0),
+        LlamaSampler::top_k(40),
+        LlamaSampler::top_p(0.9, 1),
+        LlamaSampler::temp(0.4),
+        LlamaSampler::dist(seed),
+    ]);
+    sampler.accept_many(tokens.iter());
+
     let mut output = String::new();
-    let mut sampler = LlamaSampler::greedy();
     let mut pos = n_prompt;
 
     for _ in 0..max_tokens {
@@ -157,15 +222,23 @@ fn llm_run_reuse(
         if model.is_eog_token(token) { break; }
 
         let piece = model.token_to_str(token, Special::Tokenize).unwrap_or_default();
+        if piece.is_empty() { continue; }
+        // Stop bij model-specifieke end-of-turn tokens (Gemma, Llama, Qwen, Mistral)
+        if piece.contains("\n\n")
+            || piece.contains("<end_of_turn>")
+            || piece.contains("<|")
+            || piece.contains("[/INST]")
+            || piece.contains("</s>")
+        { break; }
 
-        if piece.contains("\n\n") || piece.contains("<end_of_turn>") || piece.contains("<|") { break; }
         output.push_str(&piece);
+        on_token(piece);
 
-        // Stop na een volledige zin (check op de geaccumuleerde output, niet op de losse token)
-        if output.len() > 20 {
-            let t = output.trim_end();
-            if t.ends_with('.') || t.ends_with('!') || t.ends_with('?') { break; }
-        }
+        // Stop bij een natuurlijke zinsgrens
+        let t = output.trim_end();
+        if t.ends_with('.') || t.ends_with('!') || t.ends_with('?') { break; }
+        // Stop bij een komma zodra er al minstens één woord gegenereerd is
+        if output.contains(' ') && t.ends_with(',') { break; }
 
         if pos >= n_ctx - 1 { break; }
         batch.clear();
@@ -917,24 +990,81 @@ fn llm_get_loaded_model(state: State<'_, AppState>) -> Option<String> {
     state.loaded_model.lock().ok().and_then(|l| l.clone())
 }
 
+fn build_prompt(system_prompt: &str, user_text: &str, template: &str) -> String {
+    match template {
+        // Qwen 2.5 FIM: geen instruction-overhead, model vult direct in na de prefix
+        "qwen_fim" => format!("<|fim_prefix|>{user_text}<|fim_suffix|><|fim_middle|>"),
+        // Llama 3.x instruction format
+        "llama" => format!(
+            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{user_text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n"
+        ),
+        // Mistral instruction format
+        "mistral" => format!(
+            "<s>[INST] {system_prompt}\n\n{user_text} [/INST]"
+        ),
+        // Gemma 2/3/4 instruction format (default)
+        _ => format!(
+            "<start_of_turn>user\n{system_prompt}\n\n{user_text}<end_of_turn>\n<start_of_turn>model\n"
+        ),
+    }
+}
+
 #[command]
 async fn llm_complete(
     system_prompt: String,
     user_text: String,
     max_tokens: u32,
+    prompt_template: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let tx = state.infer_tx.lock().map_err(|e| e.to_string())?
         .clone().ok_or("LLM engine niet gestart")?;
 
-    // Gemma instruction format
-    let prompt = format!(
-        "<start_of_turn>user\n{system_prompt}\n\n{user_text}<end_of_turn>\n<start_of_turn>model\n"
-    );
+    let template = prompt_template.as_deref().unwrap_or("gemma");
+    let prompt = build_prompt(&system_prompt, &user_text, template);
 
     let (reply_tx, reply_rx) = oneshot::channel();
     tx.send(LlmMsg::Complete { prompt, max_tokens: max_tokens as usize, reply: reply_tx })
         .map_err(|e| e.to_string())?;
+    reply_rx.await.map_err(|e| e.to_string())?
+}
+
+/// Streaming versie van llm_complete — stuurt elk token als een `llm-token` window event.
+/// De client luistert op `llm-token` en filtert op `request_id` om streams te scheiden.
+#[command]
+async fn llm_complete_stream(
+    system_prompt: String,
+    user_text: String,
+    max_tokens: u32,
+    prompt_template: Option<String>,
+    request_id: u32,
+    window: Window,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let tx = state.infer_tx.lock().map_err(|e| e.to_string())?
+        .clone().ok_or("LLM engine niet gestart")?;
+
+    let template = prompt_template.as_deref().unwrap_or("gemma");
+    let prompt = build_prompt(&system_prompt, &user_text, template);
+
+    let (token_tx, token_rx) = std::sync::mpsc::channel::<Option<String>>();
+    let (reply_tx, reply_rx) = oneshot::channel();
+
+    tx.send(LlmMsg::CompleteStream { prompt, max_tokens: max_tokens as usize, token_tx, reply: reply_tx })
+        .map_err(|e| e.to_string())?;
+
+    // Stuur elk token naar het venster vanuit een aparte thread (blokkeert de tokio executor niet)
+    let win = window.clone();
+    let req_id = request_id;
+    std::thread::spawn(move || {
+        while let Ok(maybe_token) = token_rx.recv() {
+            match maybe_token {
+                Some(tok) => { let _ = win.emit("llm-token", serde_json::json!({ "id": req_id, "token": tok, "done": false })); }
+                None      => { let _ = win.emit("llm-token", serde_json::json!({ "id": req_id, "token": "",  "done": true  })); break; }
+            }
+        }
+    });
+
     reply_rx.await.map_err(|e| e.to_string())?
 }
 
@@ -1633,6 +1763,7 @@ pub fn run() {
             llm_load_model,
             llm_get_loaded_model,
             llm_complete,
+            llm_complete_stream,
         ])
         .build(tauri::generate_context!())
         .expect("fout bij opstarten van OpenSuggest")

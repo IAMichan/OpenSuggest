@@ -46,10 +46,12 @@
   }
   ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.18); }
 
-  /* Promote scrollable areas to their own GPU layer for smooth scrolling */
+  /* Contain scroll within element; -webkit-overflow-scrolling is a no-op on
+     macOS WebKit but harmless. will-change: transform on scroll containers
+     hurts WebKit compositing — do NOT add it here. */
   .overflow-y-auto, .overflow-y-scroll {
     -webkit-overflow-scrolling: touch;
-    will-change: transform;
+    overscroll-behavior-y: contain;
   }
 
   input[type="range"] {
@@ -140,10 +142,4 @@
   animation: ghost-cursor-blink 0.9s step-end infinite;
 }
 
-@keyframes ghost-suggestion-fade {
-  from { opacity: 0; }
-  to   { opacity: 1; }
-}
-.ghost-suggestion-in {
-  animation: ghost-suggestion-fade 120ms ease-out forwards;
-}
+.ghost-suggestion-in {}
